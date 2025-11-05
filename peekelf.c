@@ -295,7 +295,7 @@ int main(int argc, char* argv[])
     void*const executable_mem = mmap(
         NULL,
         executable_segment_size,
-        PROT_READ | PROT_WRITE | PROT_EXEC, // note PROT_EXEC!
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_PRIVATE | MAP_ANONYMOUS,
         -1, 0);
     Assert((intptr_t)executable_mem > 0, "%s\n", strerror(errno));
@@ -305,24 +305,31 @@ int main(int argc, char* argv[])
 
     // ------------------------------------------------------------------------
     // Exercise: Find static_foo() machine code data and copy it to executable
-    // memory block. Then call the copied function.
+    // memory block. Then call the copied function and compare it's return value
+    // to the original's return value.
 
+    // Solution: use static_foo() symbols st_value field to get offset to the
+    // relevant machine code. Note that the base pointer is .text section only
+    // if ELF is a relocateable file (object file).
     const Elf64_Sym sym_static_foo = symtab[i_static_foo];
     int(*static_foo_clone)(void) = executable_ptr;
     executable_ptr += round_to_aligned(sym_static_foo.st_size, 8);
     void* code_base = ehdr.e_type == ET_REL ? text_data : elf;
-    memcpy(static_foo_clone, code_base + sym_static_foo.st_value, sym_static_foo.st_size);
+    memcpy(
+        static_foo_clone,
+        code_base + sym_static_foo.st_value,
+        sym_static_foo.st_size);
     int static_foo_return = static_foo_clone();
     Assert(static_foo_return == static_foo());
 
     // ------------------------------------------------------------------------
     // Exercise: same as before, except with call_static_foo(), which includes a
-    // call to static_foo(), which has to be resolved. Note: offsets are 32-bits
-    // so you really have to call static_foo_clone().
+    // call to static_foo(), which has to be resolved.
 
     if (ehdr.e_type != ET_REL) // relocations already handled by static linker
         goto skip_static_reloc_exercise;
 
+    // Solution part 1: same as above.
     const Elf64_Sym sym_call_static_foo = symtab[i_call_static_foo];
     int(*call_static_foo_clone)(void) = executable_ptr;
     executable_ptr += round_to_aligned(sym_call_static_foo.st_size, 8);
@@ -331,6 +338,10 @@ int main(int argc, char* argv[])
         elf + sym_call_static_foo.st_value,
         sym_call_static_foo.st_size);
 
+    // Solution part 2: find relocation. Elf64_Rela does not have any
+    // information about which function the relocation is going to affect, so
+    // we just find the correct one by checking if the relocation address is
+    // between call_static_foo() machine code begin and end.
     Elf64_Rela rel_static_foo = {0};
     for (size_t i = 0; i < relocs_length; ++i) {
         Elf64_Addr call_foo = sym_call_static_foo.st_value;
@@ -341,6 +352,10 @@ int main(int argc, char* argv[])
         }
     }
     Assert(rel_static_foo.r_offset != 0);
+
+    // Solution part 3: apply relocation. PC counter offset is only 32 bits, so
+    // address to static_foo() is completely out of range. Therefore, we must
+    // apply the relocation to static_foo_clone() instead.
 
     int call_static_foo_return = call_static_foo_clone();
     Assert(call_static_foo_return == call_static_foo());
