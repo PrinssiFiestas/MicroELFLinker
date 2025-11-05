@@ -1,3 +1,7 @@
+// MIT License
+// Copyright (c) 2025 Lauri Lorenzo Fiestas
+// https://github.com/PrinssiFiestas/MicroELFLinker/blob/main/LICENSE
+
 #include <elf.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -8,6 +12,9 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+
+// ----------------------------------------------------------------------------
+// Utilities
 
 #define TO_STRING(X) #X
 #define TO_STRING_INDIRECT(X) TO_STRING(X)
@@ -50,6 +57,9 @@ size_t round_to_aligned(size_t x, size_t align)
     return x + align - ((x - 1) & align);
 }
 
+// ----------------------------------------------------------------------------
+// Functions for Exercises
+
 extern int shared_foo(void);
 
 int static_foo(void) // static as in statically linked, not C `static`
@@ -79,9 +89,15 @@ int call_static_foo(void)
     return result;
 }
 
+// ----------------------------------------------------------------------------
+// Main (as you might be able to tell)
+
 int main(int argc, char* argv[])
 {
     // Dummy calls to prevent garbage collector removing these from executable.
+    // Of course, the calls made in exercises would be enough, only 1 reference
+    // needed, but having these here too is nice so we can comment things out or
+    // whatever without removing these from binary.
     (void)static_foo();
     (void)shared_foo();
     (void)call_static_foo();
@@ -100,6 +116,7 @@ int main(int argc, char* argv[])
     Assert(self_fp != NULL, "%s\n", strerror(errno));
     Assert(fread(elf, 1, self_stat.st_size, self_fp) == (size_t)self_stat.st_size, "%s\n", strerror(errno));
     fclose(self_fp);
+    Assert(memcmp(elf, "\x7F""ELF", 4) == 0, "%s is not an ELF binary.\n", elf_path);
 
     const Elf64_Ehdr  ehdr      = *(Elf64_Ehdr*)elf;
     const Elf64_Shdr* shdrs     = elf + ehdr.e_shoff;
@@ -111,8 +128,9 @@ int main(int argc, char* argv[])
         "This executable has some basic code to test ELF files with machine code.\n"
         "Only pass executables, object files, or shared libraries.\n");
 
+    // ------------------------------------------------------------------------
     puts("---------------------------------------");
-    printf("Reading %s\n", elf_path);
+    printf("Reading %s\n\n", elf_path);
 
     if (ehdr.e_type == ET_EXEC || ehdr.e_type == ET_DYN)
         puts("Segments:");
@@ -171,7 +189,7 @@ int main(int argc, char* argv[])
     for (size_t i = 0; i < ehdr.e_shnum; ++i) switch (shdrs[i].sh_type)
     {
     case SHT_PROGBITS:
-        if ( ! text_data && strcmp(".text", strtab + shdrs[i].sh_name) == 0)
+        if ( ! text_data && strcmp(".text", shstrtab + shdrs[i].sh_name) == 0)
             text_data = elf + shdrs[i].sh_offset;
         executable_segment_size += shdrs[i].sh_size;
         break;
@@ -252,6 +270,23 @@ int main(int argc, char* argv[])
     }
     puts("");
 
+    // ------------------------------------------------------------------------
+    // BEGIN EXERCISES CODE
+
+    // Exercises assume input to be this executable or this object file.
+    if (argc == 1)
+        exit(EXIT_SUCCESS);
+    else { // Check if program name matches object file. Why didn't I just hard
+           // code this...
+        const char* progname = argv[0];
+        for (const char* p = progname; (p = strchr(progname, '/')) != NULL; )
+            progname = p += strlen("/");
+        size_t l = strlen(argv[1]);
+        if (strstr(argv[1], progname) == NULL
+            || l <= 2 || argv[1][l - 2] != '.' || argv[1][l - 1] != 'o')
+            exit(EXIT_SUCCESS);
+    }
+
     Assert(i_static_foo != 0);
     Assert(i_shared_foo != 0);
     Assert(i_call_static_foo != 0);
@@ -260,7 +295,7 @@ int main(int argc, char* argv[])
     void*const executable_mem = mmap(
         NULL,
         executable_segment_size,
-        PROT_READ | PROT_WRITE | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC, // note PROT_EXEC!
         MAP_PRIVATE | MAP_ANONYMOUS,
         -1, 0);
     Assert((intptr_t)executable_mem > 0, "%s\n", strerror(errno));
@@ -318,8 +353,11 @@ int main(int argc, char* argv[])
 
     // TODO
 
+    // END EXERCISES CODE
     // ------------------------------------------------------------------------
-
-    munmap(executable_mem, executable_segment_size); // shut up analyzers
+    // Pedantic cleanup to shut up analyzers
+    free(elf);
+    free(relocs);
+    munmap(executable_mem, executable_segment_size);
     puts("\e[32mAll gucci.\e[0m");
 }
