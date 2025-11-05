@@ -77,6 +77,9 @@ int static_foo(void) // static as in statically linked, not C `static`
 
 int call_shared_foo(void)
 {
+    asm (
+        "nop\n\t"
+        "nop");
     int result = shared_foo();
     result *= 5;
     return result;
@@ -86,6 +89,9 @@ int call_static_foo(void)
 {
     int result = static_foo();
     result *= 3;
+    asm (
+        "nop\n\t"
+        "nop");
     return result;
 }
 
@@ -335,7 +341,7 @@ int main(int argc, char* argv[])
     executable_ptr += round_to_aligned(sym_call_static_foo.st_size, 8);
     memcpy(
         call_static_foo_clone,
-        elf + sym_call_static_foo.st_value,
+        code_base + sym_call_static_foo.st_value,
         sym_call_static_foo.st_size);
 
     // Solution part 2: find relocation. Elf64_Rela does not have any
@@ -353,9 +359,29 @@ int main(int argc, char* argv[])
     }
     Assert(rel_static_foo.r_offset != 0);
 
+    // These are not used, we change the type and offset anyway, but may be
+    // interesting to look at in a debugger. Of course a proper linker would use
+    // these for relocation calculations.
+    uint32_t rel_static_foo_symbol_offset = ELF64_R_SYM(rel_static_foo.r_info);  (void)rel_static_foo_symbol_offset;
+    uint32_t rel_static_foo_type          = ELF64_R_TYPE(rel_static_foo.r_info); (void)rel_static_foo_type;
+
     // Solution part 3: apply relocation. PC counter offset is only 32 bits, so
     // address to static_foo() is completely out of range. Therefore, we must
     // apply the relocation to static_foo_clone() instead.
+    size_t  static_foo_reloc_offset = rel_static_foo.r_offset - sym_call_static_foo.st_value;
+    int32_t static_foo_pc_offset =
+        static_foo_clone
+      - call_static_foo_clone   // distance from call_static_foo_clone() to static_foo_clone()
+      - static_foo_reloc_offset // distance from call_static_foo_clone() to relocation
+      + rel_static_foo.r_addend // PC points to next instruction, compensate
+      ;
+    Assert(static_foo_pc_offset < 0,
+        "static_foo() was copied to executable memory first, call_static_foo() "
+        "after. Therefore, we are jumping backwards so offset should be negative.");
+    memcpy(
+        call_static_foo_clone + static_foo_reloc_offset,
+        &static_foo_pc_offset,
+        sizeof(uint32_t));
 
     int call_static_foo_return = call_static_foo_clone();
     Assert(call_static_foo_return == call_static_foo());
