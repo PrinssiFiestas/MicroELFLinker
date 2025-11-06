@@ -3,63 +3,20 @@
 // https://github.com/PrinssiFiestas/MicroELFLinker/blob/main/LICENSE
 
 #include <elf.h>
+#include "utils.h" // Assert(), xmalloc(), xrealloc(), round_to_aligned()
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <stdio.h>
 #include <errno.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
-
-// ----------------------------------------------------------------------------
-// Utilities
-
-#define TO_STRING(X) #X
-#define TO_STRING_INDIRECT(X) TO_STRING(X)
-#define LINE_STR TO_STRING_INDIRECT(__LINE__)
-
-#define Assert(COND,/* fmt_string = "", */...) \
-(                                              \
-    (COND) ?                                   \
-        (void)0                                \
-    : (                                        \
-        fprintf(stderr,                        \
-            "Condition (" #COND ") "           \
-            "\e[31mFAILED!\e[0m "              \
-            "Line " LINE_STR ".\n"             \
-            __VA_ARGS__),                      \
-        abort()                                \
-    )                                          \
-)
-
-#define xmalloc(SIZE)                  \
-({                                     \
-    void* p;                           \
-    Assert((p = malloc(SIZE)) != NULL, \
-        "%s\n", strerror(errno));      \
-    p;                                 \
-})
-
-#define xrealloc(PTR, SIZE)                  \
-({                                           \
-    void* p;                                 \
-    Assert((p = realloc(PTR, SIZE)) != NULL, \
-        "%s\n", strerror(errno));            \
-    p;                                       \
-})
-
-size_t round_to_aligned(size_t x, size_t align)
-{
-    Assert((align & (align - 1)) == 0, "Alignment must be a power of 2.\n");
-    --align;
-    return x + align - ((x - 1) & align);
-}
 
 // ----------------------------------------------------------------------------
 // Functions for Exercises
 
+// Not used for exercises, but nice to examine in debuggers assembly view to see
+// how PLT/GOT works.
 extern int shared_foo(void);
 
 int static_foo(void) // static as in statically linked, not C `static`
@@ -131,7 +88,7 @@ int main(int argc, char* argv[])
     for (size_t i = 0; i < ehdr.e_phnum; ++i)
     {
         static const char* pt_flag_strs[] = {
-            [0] = "No premissions",
+            [         0        ] = "No premissions",
             [              PF_X] = "E"   ,
             [       PF_W       ] = "W"   ,
             [       PF_W | PF_X] = "E W" ,
@@ -273,7 +230,7 @@ int main(int argc, char* argv[])
         size_t l = strlen(argv[1]);
         if (strstr(argv[1], progname) == NULL
             || l <= 2 || argv[1][l - 2] != '.' || argv[1][l - 1] != 'o')
-            exit(EXIT_SUCCESS);
+            goto pedantic_cleanup;
     }
 
     Assert(i_static_foo != 0);
@@ -373,7 +330,7 @@ int main(int argc, char* argv[])
     // END EXERCISES CODE
     // ------------------------------------------------------------------------
 
-    // Pedantic cleanup to shut up analyzers
+    pedantic_cleanup: // shut up analyzers
     free(elf);
     free(relocs);
     munmap(executable_mem, executable_segment_size);
