@@ -134,7 +134,6 @@ int main(int argc, char* argv[])
         "This executable has some basic code to test ELF files with machine code.\n"
         "Only pass executables, object files, or shared libraries.\n");
 
-    // ------------------------------------------------------------------------
     puts("---------------------------------------");
     printf("Reading %s\n\n", elf_path);
 
@@ -381,21 +380,16 @@ int main(int argc, char* argv[])
     memcpy(
         call_static_foo_clone + static_foo_reloc_offset,
         &static_foo_pc_offset,
-        sizeof(uint32_t));
+        sizeof(int32_t));
 
     int call_static_foo_return = call_static_foo_clone();
     Assert(call_static_foo_return == call_static_foo());
 
     skip_static_reloc_exercise:
 
-    // ------------------------------------------------------------------------
-    // Exercise: same as before, except with call_shared_foo(), which includes a
-    // call to shared_foo(), which has to be resolved.
-
-    // TODO
-
     // END EXERCISES CODE
     // ------------------------------------------------------------------------
+
     // Pedantic cleanup to shut up analyzers
     free(elf);
     free(relocs);
