@@ -75,16 +75,6 @@ int static_foo(void) // static as in statically linked, not C `static`
     return 19;
 }
 
-int call_shared_foo(void)
-{
-    asm (
-        "nop\n\t"
-        "nop");
-    int result = shared_foo();
-    result *= 5;
-    return result;
-}
-
 int call_static_foo(void)
 {
     int result = static_foo();
@@ -107,7 +97,6 @@ int main(int argc, char* argv[])
     (void)static_foo();
     (void)shared_foo();
     (void)call_static_foo();
-    (void)call_shared_foo();
 
     Assert(argc <= 2, "Pass a single ELF file or none for self.\n");
     const char* elf_path = argv[0];
@@ -252,7 +241,6 @@ int main(int argc, char* argv[])
     size_t i_shared_foo = 0;
     size_t i_static_foo = 0;
     size_t i_call_static_foo = 0;
-    size_t i_call_shared_foo = 0;
 
     puts("All symbols:");
     for (size_t i = 0; i < symtab_length; ++i) {
@@ -262,8 +250,6 @@ int main(int argc, char* argv[])
             i_shared_foo = i;
         else if ( ! i_call_static_foo && strcmp(strtab + symtab[i].st_name, "call_static_foo") == 0)
             i_call_static_foo = i;
-        else if ( ! i_call_shared_foo && strcmp(strtab + symtab[i].st_name, "call_shared_foo") == 0)
-            i_call_shared_foo = i;
         printf("Symbol[%zu]: %s\n", i, strtab + symtab[i].st_name);
     }
     puts("");
@@ -279,10 +265,8 @@ int main(int argc, char* argv[])
     // BEGIN EXERCISES CODE
 
     // Exercises assume input to be this executable or this object file.
-    if (argc == 1)
-        exit(EXIT_SUCCESS);
-    else { // Check if program name matches object file. Why didn't I just hard
-           // code this...
+    if (argc >= 2) // Check if program name matches object file. Why didn't I
+    {              // just hard code this...
         const char* progname = argv[0];
         for (const char* p = progname; (p = strchr(progname, '/')) != NULL; )
             progname = p += strlen("/");
@@ -295,7 +279,6 @@ int main(int argc, char* argv[])
     Assert(i_static_foo != 0);
     Assert(i_shared_foo != 0);
     Assert(i_call_static_foo != 0);
-    Assert(i_call_shared_foo != 0);
 
     void*const executable_mem = mmap(
         NULL,
