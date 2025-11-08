@@ -7,6 +7,7 @@
 .PHONY: debug # same as all except with sanitizers.
 .PHONY: clean # remove build junk
 
+LNKNAME = microlink
 ELFNAME = peekelf
 CC = cc
 
@@ -16,6 +17,7 @@ all:
 	as -o foobar.o -g foobar.asm
 	as -o bar.o -g bar.asm
 	ld -o foobar foobar.o bar.o
+	$(CC) -o $(LNKNAME) -Wall -Wextra -ggdb3 -gdwarf $(LNKNAME).c $(SANITIZERS)
 	$(CC) -c -Wall -Wextra -ggdb3 -gdwarf $(ELFNAME).c $(SANITIZERS)
 	$(CC) -c -Wall -Wextra shared_foo.c -Os
 	$(CC) -o shared_foo.so shared_foo.o -shared
@@ -25,4 +27,4 @@ debug: SANITIZERS = -fsanitize=address -fsanitize=leak -fsanitize=undefined
 debug: all
 
 clean:
-	rm *.o *.so $(ELFNAME)
+	rm *.o *.so $(ELFNAME) $(LNKNAME)

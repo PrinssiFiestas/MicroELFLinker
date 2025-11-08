@@ -8,9 +8,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <errno.h>
 #include <stdbool.h>
-#include <string.h>
 
 // ----------------------------------------------------------------------------
 // Functions for Exercises
@@ -126,16 +124,14 @@ int main(int argc, char* argv[])
         printf("Section[%zu]: %s\n", i, shstrtab + shdrs[i].sh_name);
     puts("");
 
-    size_t           symtab_length   = 0    ;
-    const Elf64_Sym* symtab          = NULL ;
-    size_t           dynsyms_length  = 0    ;
-    const Elf64_Sym* dynsyms         = NULL ;
-    const char*      dynstr          = NULL ;
-    const char*      strtab          = NULL ;
-    size_t           relocs_capacity = 64   ; // arbitrary
-    size_t           relocs_length   = 0    ;
-    void*            text_data       = NULL ; // .text
-    Elf64_Rela*      relocs          = xmalloc(relocs_capacity * sizeof relocs[0]);
+    size_t             symtab_length   = 0    ;
+    const Elf64_Sym*   symtab          = NULL ;
+    size_t             dynsyms_length  = 0    ;
+    const Elf64_Sym*   dynsyms         = NULL ;
+    const char*        dynstr          = NULL ;
+    const char*        strtab          = NULL ;
+    void*              text_data       = NULL ; // .text
+    DynArr(Elf64_Rela) relocs          = NULL ;
 
     for (size_t i = 0; i < ehdr.e_shnum; ++i) switch (shdrs[i].sh_type)
     {
@@ -166,24 +162,13 @@ int main(int argc, char* argv[])
         Elf64_Rel* rels = (Elf64_Rel*)(elf + shdrs[i].sh_offset);
         for (size_t j = 0; j < shdrs[i].sh_size; ++j) {
             Elf64_Rela rela = { .r_offset = rels[j].r_offset, .r_info = rels[j].r_info, .r_addend = 0 };
-            if (relocs_length + 1 > relocs_capacity)
-                relocs = xrealloc(relocs, (relocs_capacity <<= 1) * sizeof relocs[0]);
-            relocs[relocs_length++] = rela;
+            dynarr_push(&relocs, rela);
         }
         break;
 
     case SHT_RELA:
-        if (relocs_length + shdrs[i].sh_size > relocs_capacity) {
-            do {
-                relocs_capacity <<= 1;
-            } while (relocs_capacity < relocs_length + shdrs[i].sh_size);
-            relocs = xrealloc(relocs, relocs_capacity * sizeof relocs[0]);
-        }
-        memcpy(
-            relocs + relocs_length,
-            elf + shdrs[i].sh_offset,
-            shdrs[i].sh_size);
-        relocs_length += shdrs[i].sh_size;
+        dynarr_append(
+            &relocs, elf + shdrs[i].sh_offset, shdrs[i].sh_size / sizeof relocs[0]);
         break;
     }
 
@@ -288,11 +273,11 @@ int main(int argc, char* argv[])
     // we just find the correct one by checking if the relocation address is
     // between call_static_foo() machine code begin and end.
     Elf64_Rela rel_static_foo = {0};
-    for (size_t i = 0; i < relocs_length; ++i) {
+    for (size_t i = 0; i < relocs->length; ++i) {
         Elf64_Addr call_foo = sym_call_static_foo.st_value;
-        Elf64_Addr roff = relocs[i].r_offset;
+        Elf64_Addr roff = relocs->data[i].r_offset;
         if (call_foo <= roff && roff < call_foo + sym_call_static_foo.st_size) {
-            rel_static_foo = relocs[i];
+            rel_static_foo = relocs->data[i];
             break;
         }
     }
