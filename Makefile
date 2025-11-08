@@ -8,11 +8,16 @@
 .PHONY: clean # remove build junk
 
 ELFNAME = peekelf
-CC = clang
+CC = cc
 
 all:
+	as -o hello.o -g hello.asm
+	ld -o hello hello.o
+	as -o foobar.o -g foobar.asm
+	as -o bar.o -g bar.asm
+	ld -o foobar foobar.o bar.o
 	$(CC) -c -Wall -Wextra -ggdb3 -gdwarf $(ELFNAME).c $(SANITIZERS)
-	$(CC) -c -Wall -Wextra shared_foo.c -Oz
+	$(CC) -c -Wall -Wextra shared_foo.c -Os
 	$(CC) -o shared_foo.so shared_foo.o -shared
 	$(CC) -o $(ELFNAME) $(ELFNAME).o shared_foo.so $(SANITIZERS)
 

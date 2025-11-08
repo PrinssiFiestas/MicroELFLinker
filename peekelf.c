@@ -221,6 +221,17 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------------------
     // BEGIN EXERCISES CODE
 
+    void*const executable_mem = mmap(
+        NULL,
+        executable_segment_size,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1, 0);
+    Assert((intptr_t)executable_mem > 0, "%s\n", strerror(errno));
+    // Executable arena pointer. Move this to allocate memory instead of calling
+    // mmap() for all functions.
+    void* executable_ptr = executable_mem;
+
     // Exercises assume input to be this executable or this object file.
     if (argc >= 2) // Check if program name matches object file. Why didn't I
     {              // just hard code this...
@@ -236,17 +247,6 @@ int main(int argc, char* argv[])
     Assert(i_static_foo != 0);
     Assert(i_shared_foo != 0);
     Assert(i_call_static_foo != 0);
-
-    void*const executable_mem = mmap(
-        NULL,
-        executable_segment_size,
-        PROT_READ | PROT_WRITE | PROT_EXEC,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1, 0);
-    Assert((intptr_t)executable_mem > 0, "%s\n", strerror(errno));
-    // Executable arena pointer. Move this to allocate memory instead of calling
-    // mmap() for all functions.
-    void* executable_ptr = executable_mem;
 
     // ------------------------------------------------------------------------
     // Exercise: Find static_foo() machine code data and copy it to executable
