@@ -3,12 +3,25 @@
 // https://github.com/PrinssiFiestas/MicroELFLinker/blob/main/LICENSE
 
 #include <elf.h>
-#include "utils.h" // Assert(), xmalloc(), xrealloc(), round_to_aligned()
+#include "utils.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <stdbool.h>
+
+typedef struct segment
+{
+    Elf64_Phdr            header;
+    DynArr(unsigned char) contents;
+} Segment;
+
+typedef struct section
+{
+    const char*           name;
+    Elf64_Shdr            header;
+    DynArr(unsigned char) contents;
+} Section;
 
 void* read_elf_file(const char* path)
 {
@@ -25,6 +38,37 @@ void* read_elf_file(const char* path)
     return elf;
 }
 
+// Find segment of spesific type with given flags. Create one if not found.
+size_t get_make_segment_index(
+    void*_segments,
+    Elf64_Word type,
+    Elf64_Word flags,
+    Elf64_Addr voffset, // used if new created
+    Elf64_Xword align)  // used if new created
+{
+    DynArr(Segment)* segs_ptr = _segments;
+    typeof(*segs_ptr) segs = *segs_ptr;
+
+    size_t k = 0;
+    for (; k < segs->length; ++k)
+        if (segs->data[k].header.p_type == type && segs->data[k].header.p_flags == flags)
+            break;
+
+    if (k == segs->length) {
+        Segment s = {
+            .header = {
+                .p_type  = type,
+                .p_flags = flags,
+                .p_vaddr = voffset, // file offsets added later
+                .p_paddr = voffset,
+                .p_align = align
+            }
+        };
+        dynarr_push(segs_ptr, s);
+    }
+    return k;
+}
+
 int main(int argc, char* argv[])
 {
     if (argc == 1) {
@@ -32,46 +76,243 @@ int main(int argc, char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    size_t      out_size  = 0;
-    Elf64_Ehdr* out       = NULL;
-    void*       out_elf   = NULL; // same as out, used for pointer arithmetic
-    Elf64_Shdr* out_shdrs = NULL;
-    Elf64_Phdr* out_phdrs = NULL;
-    size_t      out_shstrtab_capacity = 16;
-    size_t      out_shstrtab_length   = 0;
-    char*       out_shstrtab          = NULL;
+    DynArr(Section) sections = NULL;
+    DynArr(char)    shstrtab = NULL;
 
     size_t elfs_length = argc - 1;
     void** elfs = xmalloc(elfs_length * sizeof elfs[0]);
     Elf64_Ehdr** ehdrs = xmalloc(elfs_length * sizeof(void*)); // same as elfs, but casted for convenience
-    out_shstrtab = xmalloc(out_shstrtab_capacity);
 
+    // ------------------------------------------------------------------------
+    // Read input files and merge sections
+
+    dynarr_push(&sections, (Section){.name = ""}); // optional empty section at the start is common
     for (size_t i = 0; i < elfs_length; ++i)
     {
         ehdrs[i] = elfs[i] = read_elf_file(argv[i + 1]);
+        Elf64_Ehdr ehdr = *(ehdrs[i]);
+        Elf64_Shdr* shdrs = elfs[i] + ehdr.e_shoff;
+        const char* shstrtab = elfs[i] + shdrs[ehdr.e_shstrndx].sh_offset;
 
-        out_size += ehdrs[i]->e_shentsize * ehdrs[i]->e_shnum;
-
-        for (size_t j = 0; j < ehdrs[i]->e_shnum; ++j)
+        for (size_t j = 0; j < ehdr.e_shnum; ++j)
         {
-            Elf64_Shdr shdr = *(Elf64_Shdr*)(elfs[i] + ehdrs[i]->e_shoff);
-            const char* sname = elfs[i] + ehdrs[i]->e_shstrndx + shdr.sh_name;
+            Elf64_Shdr shdr = shdrs[j];
 
-            const char* shstr;
-            for (shstr = out_shstrtab;
-                shstr < out_shstrtab + out_shstrtab_length;
-                shstr += strlen(shstr) + sizeof"")
-            {
-                if (strcmp(shstr, sname) == 0)
+            // Find section
+            size_t k = 0;
+            for (; k < sections->length; ++k)
+                if (strcmp(sections->data[k].name, shstrtab + shdr.sh_name) == 0)
                     break;
+
+            if (k == sections->length) { // no output section found, create
+                Section section = {
+                    .name = shstrtab + shdr.sh_name,
+                    .header = shdr
+                };
+                dynarr_push(&sections, section);
+            } else { // some of my assumptions, may not hold true for all linkers
+                Assert(shdr.sh_type == sections->data[k].header.sh_type);
+                Assert(shdr.sh_flags == sections->data[k].header.sh_flags);
+                Assert(shdr.sh_addralign == sections->data[k].header.sh_addralign);
+                Assert(shdr.sh_entsize == sections->data[k].header.sh_entsize);
             }
-            if (shstr > out_shstrtab)
-            {
-            }
+            // TODO what do we do with .sh_link?
+
+            dynarr_align(&sections->data[k].contents, shdr.sh_addralign);
+            dynarr_append(
+                &sections->data[k].contents, elfs[i] + shdr.sh_offset, shdr.sh_size);
+            sections->data[k].header.sh_size = sections->data[k].contents->length;
         }
     }
 
-    out_size += sizeof *out;
-    out = out_elf = xmalloc(out_size);
+    // ------------------------------------------------------------------------
+    // Create segments
 
+    DynArr(Segment) segments = NULL;
+    DynArr(char) out_shstrtab = NULL;
+    dynarr_add_reserve(sizeof(char), &out_shstrtab, 1);
+    size_t out_shstrtab_index = 0;
+
+    // We'll just do what ld does.
+    // https://stackoverflow.com/questions/14314021/why-linux-gnu-linker-chose-address-0x400000
+    const Elf64_Addr voffset = 0x400000;
+
+    // The first segment for debuggers and other tooling contains ELF header and
+    // program headers.
+    Segment header_segment = {
+        .header = {
+            .p_type   = PT_LOAD,
+            .p_flags  = PF_R,
+            .p_vaddr  = voffset,
+            .p_paddr  = voffset,
+        }
+    };
+    dynarr_push(&segments, header_segment);
+
+    static const
+    Elf64_Xword translate_flags[SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR] = {
+        [SHF_ALLOC | SHF_EXECINSTR] = PF_R | PF_X,
+        [SHF_ALLOC | SHF_WRITE    ] = PF_R | PF_W,
+        [SHF_ALLOC                ] = PF_R
+    };
+
+    // Sort sections
+    for (size_t i = 0; i < sections->length; ++i)
+    {
+        Section* sect = &sections->data[i];
+        sect->header.sh_name = out_shstrtab->length;
+        const char* name = sect->name;
+        dynarr_append(&out_shstrtab, name, strlen(name) + sizeof"");
+
+        switch (sect->header.sh_type)
+        {
+        case SHT_NULL: // nothing to do
+            break;
+
+        case SHT_PROGBITS:;
+            Elf64_Xword flags = translate_flags[
+                sect->header.sh_flags & (SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR)];
+
+            size_t k = get_make_segment_index(
+                &segments,
+                PT_LOAD,
+                flags,
+                voffset,
+                0x1000);
+            dynarr_align(&segments->data[k].contents, sect->header.sh_addralign);
+            dynarr_append(
+                &segments->data[k].contents, sect->contents->data, sect->contents->length);
+            break;
+
+        // case SHT_SYMTAB:
+        //     // TODO do we have to do something here?
+        //     break;
+
+        case SHT_STRTAB:
+            if (strcmp(sect->name, ".shstrtab") == 0) {
+                out_shstrtab_index = i;
+                free(sect->contents);
+                sect->contents = (typeof(sect->contents))out_shstrtab;
+                sect->header.sh_size = out_shstrtab->length;
+            }
+            // TODO do we have to do something here?
+            // break; // falltrough
+
+            // TODO others like dynamic linking information??
+
+        // falltrough
+        default: // let's just dump everything else to first segment for now
+            dynarr_align(&segments->data[0].contents, sect->header.sh_addralign);
+            dynarr_append(
+                &segments->data[0].contents, sect->contents->data, sect->contents->length);
+        }
+    }
+
+    segments->data[0].header.p_filesz = segments->data[0].header.p_memsz =
+        sizeof(Elf64_Ehdr) + segments->length * sizeof(Elf64_Phdr);
+
+    // ------------------------------------------------------------------------
+    // Create final output
+
+    Elf64_Addr entry_offset = 0x1000; // TODO fix hard coded address
+
+    Elf64_Ehdr out_ehdr = {
+        .e_ident     = { 0x7F, 'E', 'L', 'F', ELFCLASS64, ELFDATA2LSB, EV_CURRENT },
+        .e_type      = ET_EXEC,
+        .e_machine   = EM_X86_64,
+        .e_version   = EV_CURRENT,
+        .e_entry     = voffset + entry_offset,
+        .e_shoff     = sizeof out_ehdr + segments->length * sizeof(Elf64_Phdr),
+        .e_phoff     = sizeof out_ehdr,
+        .e_flags     = 0,
+        .e_ehsize    = sizeof out_ehdr,
+        .e_phentsize = sizeof(Elf64_Phdr),
+        .e_phnum     = segments->length,
+        .e_shentsize = sizeof(Elf64_Shdr),
+        .e_shnum     = sections->length,
+        .e_shstrndx  = out_shstrtab_index,
+    };
+
+    DynArr(unsigned char) out_data = NULL;
+    dynarr_append(&out_data, &out_ehdr, sizeof out_ehdr);
+
+    // Append segment and section header tables
+    // Note: the headers have some incorrect addresses at this point, but we
+    // find and update them later.
+    for (size_t i = 0; i < segments->length; ++i)
+        dynarr_append(
+            &out_data,
+            &segments->data[i].header,
+            sizeof segments->data[i].header);
+    for (size_t i = 0; i < sections->length; ++i)
+        dynarr_append(
+            &out_data,
+            &sections->data[i].header,
+            sizeof sections->data[i].header);
+
+    // Append all segment contents. At this point we also know file offsets,
+    // update those as well.
+    dynarr_append(
+        &out_data, segments->data[0].contents->data, segments->data[0].contents->length);
+    Elf64_Xword seg0size = sizeof(Elf64_Ehdr) + segments->length * sizeof(Elf64_Phdr);
+    ((Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff))->p_filesz = seg0size;
+    ((Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff))->p_memsz  = seg0size;
+    ((Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff))->p_align  = 0x1000;
+    for (size_t i = 1; i < segments->length; ++i)
+    {
+        Segment seg = segments->data[i];
+
+        dynarr_align(&out_data, seg.header.p_align);
+        Elf64_Off offset = out_data->length;
+        Elf64_Phdr* phdrs = (Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff);
+        phdrs[i].p_offset = offset;
+        phdrs[i].p_vaddr += offset;
+        phdrs[i].p_paddr += offset;
+        dynarr_append(&out_data, seg.contents->data, seg.contents->length);
+    }
+
+    // All data has been written so we know all file offsets, so now we can
+    // update the offsets of the final section headers.
+    Elf64_Phdr* segs = (Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff);
+    Elf64_Shdr* secs = (Elf64_Shdr*)(out_data->data + out_ehdr.e_shoff);
+    Elf64_Off*  offs = xcalloc(sizeof offs[0], segments->length);
+    for (size_t i = 0; i < sections->length; ++i)
+    {
+        Elf64_Xword flags = translate_flags[
+            secs[i].sh_flags & (SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR)];
+
+        size_t k = get_make_segment_index(&segments, PT_LOAD, flags, 0, 0);
+        offs[k] = round_to_aligned(offs[k], secs[i].sh_addralign);
+        Elf64_Off offset = segs[k].p_offset + offs[k];
+        secs[i].sh_offset = offset;
+        secs[i].sh_addr = (secs[i].sh_flags & SHF_ALLOC) ? offset + voffset : 0;
+        offs[k] += secs[i].sh_size;
+    }
+
+    // Finally, write the actual output file. // TODO -o flag
+    const char* out_path = "a.out";
+    FILE* out_fp = fopen(out_path, "wb");
+    Assert(out_fp != NULL, "fopen(): %s\n", strerror(errno));
+    Assert(fwrite(out_data->data, 1, out_data->length, out_fp) == out_data->length,
+        "%s\n", strerror(errno));
+    fclose(out_fp);
+    Assert(chmod(out_path, 0755) != -1, "%s\n", strerror(errno));
+
+    // ------------------------------------------------------------------------
+    // Pedantic cleanup to shut up analyzers
+
+    for (size_t i = 0; i < segments->length; ++i)
+        free(segments->data[i].contents);
+    free(segments);
+    for (size_t i = 0; i < sections->length; ++i)
+        free(sections->data[i].contents);
+    free(sections);
+    free(shstrtab);
+    for (size_t i = 0; i < elfs_length; ++i) {
+        free(elfs[i]);
+    }
+    free(elfs);
+    free(ehdrs);
+    free(out_data);
+    free(offs);
 }

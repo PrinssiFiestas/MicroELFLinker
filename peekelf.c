@@ -13,10 +13,6 @@
 // ----------------------------------------------------------------------------
 // Functions for Exercises
 
-// Not used for exercises, but nice to examine in debuggers assembly view to see
-// how PLT/GOT works.
-extern int shared_foo(void);
-
 int static_foo(void) // static as in statically linked, not C `static`
 {
     bool b = true; // prevent removing inline assembly below
@@ -50,7 +46,6 @@ int main(int argc, char* argv[])
     // needed, but having these here too is nice so we can comment things out or
     // whatever without removing these from binary.
     (void)static_foo();
-    (void)shared_foo();
     (void)call_static_foo();
 
     Assert(argc <= 2, "Pass a single ELF file or none for self.\n");
@@ -121,7 +116,7 @@ int main(int argc, char* argv[])
 
     puts("Sections:");
     for (size_t i = 0; i < ehdr.e_shnum; ++i)
-        printf("Section[%zu]: %s\n", i, shstrtab + shdrs[i].sh_name);
+        printf("Section[%2zu]: %s\n", i, shstrtab + shdrs[i].sh_name);
     puts("");
 
     size_t             symtab_length   = 0    ;
@@ -172,7 +167,7 @@ int main(int argc, char* argv[])
         break;
     }
 
-    if (ehdr.e_type == ET_EXEC || ehdr.e_type == ET_DYN) {
+    if (ehdr.e_type == ET_DYN) {
         Assert(dynsyms_length != 0);
         Assert(dynstr != NULL);
         Assert(dynsyms != NULL);
@@ -192,7 +187,7 @@ int main(int argc, char* argv[])
             i_shared_foo = i;
         else if ( ! i_call_static_foo && strcmp(strtab + symtab[i].st_name, "call_static_foo") == 0)
             i_call_static_foo = i;
-        printf("Symbol[%zu]: %s\n", i, strtab + symtab[i].st_name);
+        printf("Symbol[%2zu]: %s\n", i, strtab + symtab[i].st_name);
     }
     puts("");
 

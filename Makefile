@@ -19,12 +19,10 @@ all:
 	ld -o foobar foobar.o bar.o
 	$(CC) -o $(LNKNAME) -Wall -Wextra -ggdb3 -gdwarf $(LNKNAME).c $(SANITIZERS)
 	$(CC) -c -Wall -Wextra -ggdb3 -gdwarf $(ELFNAME).c $(SANITIZERS)
-	$(CC) -c -Wall -Wextra shared_foo.c -Os
-	$(CC) -o shared_foo.so shared_foo.o -shared
-	$(CC) -o $(ELFNAME) $(ELFNAME).o shared_foo.so $(SANITIZERS)
+	$(CC) -o $(ELFNAME) $(ELFNAME).o $(SANITIZERS)
 
 debug: SANITIZERS = -fsanitize=address -fsanitize=leak -fsanitize=undefined
 debug: all
 
 clean:
-	rm *.o *.so $(ELFNAME) $(LNKNAME)
+	rm -f a.out foobar hello *.o *.so $(ELFNAME) $(LNKNAME)
