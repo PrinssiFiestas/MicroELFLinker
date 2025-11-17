@@ -38,7 +38,7 @@ void* read_elf_file(const char* path)
     return elf;
 }
 
-// Find segment of spesific type with given flags. Create one if not found.
+// Find segment of specific type with given flags. Create one if not found.
 size_t get_make_segment_index(
     void*_segments,
     Elf64_Word type,
@@ -69,7 +69,7 @@ size_t get_make_segment_index(
     return k;
 }
 
-int main(int argc, char* argv[])
+int main(int argc, char* argv[]) //
 {
     if (argc == 1) {
         fprintf(stderr, "Usage: %s [file(s)]\n", argv[0]);
@@ -77,7 +77,6 @@ int main(int argc, char* argv[])
     }
 
     DynArr(Section) sections = NULL;
-    DynArr(char)    shstrtab = NULL;
 
     size_t elfs_length = argc - 1;
     void** elfs = xmalloc(elfs_length * sizeof elfs[0]);
@@ -149,14 +148,7 @@ int main(int argc, char* argv[])
     };
     dynarr_push(&segments, header_segment);
 
-    static const
-    Elf64_Xword translate_flags[SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR] = {
-        [SHF_ALLOC | SHF_EXECINSTR] = PF_R | PF_X,
-        [SHF_ALLOC | SHF_WRITE    ] = PF_R | PF_W,
-        [SHF_ALLOC                ] = PF_R
-    };
-
-    // Sort sections
+    // Build section header string table
     for (size_t i = 0; i < sections->length; ++i)
     {
         Section* sect = &sections->data[i];
@@ -164,48 +156,45 @@ int main(int argc, char* argv[])
         const char* name = sect->name;
         dynarr_append(&out_shstrtab, name, strlen(name) + sizeof"");
 
-        switch (sect->header.sh_type)
-        {
-        case SHT_NULL: // nothing to do
-            break;
+        if (sect->header.sh_type == SHT_STRTAB && strcmp(sect->name, ".shstrtab") == 0)
+            out_shstrtab_index = i;
+    }
+    // Replace section header string table contents
+    {
+        Section* sect = &sections->data[out_shstrtab_index];
+        free(sect->contents);
+        sect->contents = (typeof(sect->contents))out_shstrtab;
+        sect->header.sh_size = out_shstrtab->length;
+    }
 
-        case SHT_PROGBITS:;
+    static const
+    Elf64_Xword translate_flags[SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR] = {
+        [SHF_ALLOC | SHF_EXECINSTR] = PF_R | PF_X,
+        [SHF_ALLOC | SHF_WRITE    ] = PF_R | PF_W,
+        [SHF_ALLOC                ] = PF_R
+    };
+
+    // Sort sections to segments
+    for (size_t i = 0; i < sections->length; ++i)
+    {
+        Section* sect = &sections->data[i];
+        size_t k = 0;
+
+        if (sect->header.sh_type == SHT_PROGBITS)
+        {
             Elf64_Xword flags = translate_flags[
                 sect->header.sh_flags & (SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR)];
-
-            size_t k = get_make_segment_index(
+            if (flags == 0)
+                flags = PF_R;
+             k = get_make_segment_index(
                 &segments,
                 PT_LOAD,
                 flags,
                 voffset,
                 0x1000);
-            dynarr_align(&segments->data[k].contents, sect->header.sh_addralign);
-            dynarr_append(
-                &segments->data[k].contents, sect->contents->data, sect->contents->length);
-            break;
-
-        // case SHT_SYMTAB:
-        //     // TODO do we have to do something here?
-        //     break;
-
-        case SHT_STRTAB:
-            if (strcmp(sect->name, ".shstrtab") == 0) {
-                out_shstrtab_index = i;
-                free(sect->contents);
-                sect->contents = (typeof(sect->contents))out_shstrtab;
-                sect->header.sh_size = out_shstrtab->length;
-            }
-            // TODO do we have to do something here?
-            // break; // falltrough
-
-            // TODO others like dynamic linking information??
-
-        // falltrough
-        default: // let's just dump everything else to first segment for now
-            dynarr_align(&segments->data[0].contents, sect->header.sh_addralign);
-            dynarr_append(
-                &segments->data[0].contents, sect->contents->data, sect->contents->length);
         }
+        dynarr_append(
+            &segments->data[k].contents, sect->contents->data, sect->contents->length);
     }
 
     segments->data[0].header.p_filesz = segments->data[0].header.p_memsz =
@@ -265,6 +254,8 @@ int main(int argc, char* argv[])
         dynarr_align(&out_data, seg.header.p_align);
         Elf64_Off offset = out_data->length;
         Elf64_Phdr* phdrs = (Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff);
+        phdrs[i].p_filesz = seg.contents->length;
+        phdrs[i].p_memsz  = seg.contents->length;
         phdrs[i].p_offset = offset;
         phdrs[i].p_vaddr += offset;
         phdrs[i].p_paddr += offset;
@@ -275,11 +266,13 @@ int main(int argc, char* argv[])
     // update the offsets of the final section headers.
     Elf64_Phdr* segs = (Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff);
     Elf64_Shdr* secs = (Elf64_Shdr*)(out_data->data + out_ehdr.e_shoff);
-    Elf64_Off*  offs = xcalloc(sizeof offs[0], segments->length);
+    Elf64_Off*  offs = xcalloc(segments->length, sizeof offs[0]);
     for (size_t i = 0; i < sections->length; ++i)
     {
         Elf64_Xword flags = translate_flags[
             secs[i].sh_flags & (SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR)];
+        if (flags == 0)
+            flags = PF_R;
 
         size_t k = get_make_segment_index(&segments, PT_LOAD, flags, 0, 0);
         offs[k] = round_to_aligned(offs[k], secs[i].sh_addralign);
@@ -307,7 +300,6 @@ int main(int argc, char* argv[])
     for (size_t i = 0; i < sections->length; ++i)
         free(sections->data[i].contents);
     free(sections);
-    free(shstrtab);
     for (size_t i = 0; i < elfs_length; ++i) {
         free(elfs[i]);
     }

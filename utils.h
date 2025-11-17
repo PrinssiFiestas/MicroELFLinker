@@ -79,10 +79,10 @@
     p;                                 \
 })
 
-#define xcalloc(SIZE, NMEMB)                  \
+#define xcalloc(NMEMB, SIZE)                  \
 ({                                            \
     void* p;                                  \
-    Assert((p = calloc(SIZE, NMEMB)) != NULL, \
+    Assert((p = calloc(NMEMB, SIZE)) != NULL, \
         "%s\n", strerror(errno));             \
     p;                                        \
 })
@@ -120,7 +120,7 @@ static inline void dynarr_add_reserve(size_t elem_size, void* darr_ptr, size_t n
         return;
     do {
         (*darr)->capacity <<= 1;
-    } while ((*darr)->capacity < nelems);
+    } while ((*darr)->capacity < (*darr)->length + nelems);
 
     *darr = xrealloc(*darr, sizeof(**darr) + elem_size * (*darr)->capacity);
 }
