@@ -19,6 +19,8 @@ typedef struct segment
 typedef struct section
 {
     const char*           name;
+    size_t                segment_index;
+    Elf64_Off             segment_offset;
     Elf64_Shdr            header;
     DynArr(unsigned char) contents;
 } Section;
@@ -193,6 +195,17 @@ int main(int argc, char* argv[]) //
                 voffset,
                 0x1000);
         }
+
+        // Note: segment offset for first segment is incorrect here (missing
+        // program header table size and section header table size) because we
+        // don't know the number of segments yet, so it has to be compensated
+        // later.
+        if (segments->data[k].contents != NULL)
+            sect->segment_offset = segments->data[k].contents->length;
+        else
+            sect->segment_offset = 0;
+        sect->segment_index = k;
+
         dynarr_append(
             &segments->data[k].contents, sect->contents->data, sect->contents->length);
     }
@@ -252,13 +265,12 @@ int main(int argc, char* argv[]) //
         Segment seg = segments->data[i];
 
         dynarr_align(&out_data, seg.header.p_align);
-        Elf64_Off offset = out_data->length;
         Elf64_Phdr* phdrs = (Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff);
         phdrs[i].p_filesz = seg.contents->length;
         phdrs[i].p_memsz  = seg.contents->length;
-        phdrs[i].p_offset = offset;
-        phdrs[i].p_vaddr += offset;
-        phdrs[i].p_paddr += offset;
+        phdrs[i].p_offset = out_data->length;
+        phdrs[i].p_vaddr += out_data->length;
+        phdrs[i].p_paddr += out_data->length;
         dynarr_append(&out_data, seg.contents->data, seg.contents->length);
     }
 
@@ -266,20 +278,20 @@ int main(int argc, char* argv[]) //
     // update the offsets of the final section headers.
     Elf64_Phdr* segs = (Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff);
     Elf64_Shdr* secs = (Elf64_Shdr*)(out_data->data + out_ehdr.e_shoff);
-    Elf64_Off*  offs = xcalloc(segments->length, sizeof offs[0]);
     for (size_t i = 0; i < sections->length; ++i)
     {
-        Elf64_Xword flags = translate_flags[
-            secs[i].sh_flags & (SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR)];
-        if (flags == 0)
-            flags = PF_R;
+        Section sect = sections->data[i];
+        size_t  k    = sect.segment_index;
+        secs[i].sh_offset = segs[k].p_offset + sect.segment_offset;
+        if (k == 0) // do the header tables size compensation mentioned in a comment way above
+            secs[i].sh_offset += sizeof(Elf64_Ehdr)
+                + segments->length * sizeof(Elf64_Phdr)
+                + sections->length * sizeof(Elf64_Shdr);
 
-        size_t k = get_make_segment_index(&segments, PT_LOAD, flags, 0, 0);
-        offs[k] = round_to_aligned(offs[k], secs[i].sh_addralign);
-        Elf64_Off offset = segs[k].p_offset + offs[k];
-        secs[i].sh_offset = offset;
-        secs[i].sh_addr = (secs[i].sh_flags & SHF_ALLOC) ? offset + voffset : 0;
-        offs[k] += secs[i].sh_size;
+        if (secs[i].sh_flags & SHF_ALLOC)
+            secs[i].sh_addr = secs[i].sh_offset + voffset;
+        else
+            secs[i].sh_addr = 0;
     }
 
     // Finally, write the actual output file. // TODO -o flag
@@ -306,5 +318,4 @@ int main(int argc, char* argv[]) //
     free(elfs);
     free(ehdrs);
     free(out_data);
-    free(offs);
 }
