@@ -81,7 +81,7 @@ int main(int argc, char* argv[])
     for (size_t i = 0; i < ehdr.e_phnum; ++i)
     {
         static const char* pt_flag_strs[] = {
-            [         0        ] = "No premissions",
+            [         0        ] = "No permissions",
             [              PF_X] = "E"   ,
             [       PF_W       ] = "W"   ,
             [       PF_W | PF_X] = "E W" ,
@@ -171,11 +171,11 @@ int main(int argc, char* argv[])
         Assert(dynsyms_length != 0);
         Assert(dynstr != NULL);
         Assert(dynsyms != NULL);
-    }
+    } else if (ehdr.e_type == ET_REL) for (size_t i = 0; i < ehdr.e_shnum; ++i)
+        Assert(shdrs[i].sh_addr == 0, "Relocatable (object) files have no runtime address.");
     Assert(symtab_length != 0);
     Assert(symtab != NULL);
 
-    size_t i_shared_foo = 0;
     size_t i_static_foo = 0;
     size_t i_call_static_foo = 0;
 
@@ -183,11 +183,14 @@ int main(int argc, char* argv[])
     for (size_t i = 0; i < symtab_length; ++i) {
         if ( ! i_static_foo && strcmp(strtab + symtab[i].st_name, "static_foo") == 0)
             i_static_foo = i;
-        if ( ! i_shared_foo && strcmp(strtab + symtab[i].st_name, "shared_foo") == 0)
-            i_shared_foo = i;
         else if ( ! i_call_static_foo && strcmp(strtab + symtab[i].st_name, "call_static_foo") == 0)
             i_call_static_foo = i;
-        printf("Symbol[%2zu]: %s\n", i, strtab + symtab[i].st_name);
+
+        uint8_t type = ELF64_ST_TYPE(symtab[i].st_info);
+        if (type == STT_SECTION)
+            printf("Symbol[%2zu]: %s\n", i, shstrtab + shdrs[symtab[i].st_shndx].sh_name);
+        else
+            printf("Symbol[%2zu]: %s\n", i, strtab + symtab[i].st_name);
     }
     puts("");
 
@@ -225,7 +228,6 @@ int main(int argc, char* argv[])
     }
 
     Assert(i_static_foo != 0);
-    Assert(i_shared_foo != 0);
     Assert(i_call_static_foo != 0);
 
     // ------------------------------------------------------------------------
@@ -235,7 +237,7 @@ int main(int argc, char* argv[])
 
     // Solution: use static_foo() symbols st_value field to get offset to the
     // relevant machine code. Note that the base pointer is .text section only
-    // if ELF is a relocateable file (object file).
+    // if ELF is a relocatable file (object file).
     const Elf64_Sym sym_static_foo = symtab[i_static_foo];
     int(*static_foo_clone)(void) = executable_ptr;
     executable_ptr += round_to_aligned(sym_static_foo.st_size, 8);

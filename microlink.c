@@ -71,7 +71,7 @@ size_t get_make_segment_index(
     return k;
 }
 
-int main(int argc, char* argv[]) //
+int main(int argc, char* argv[])
 {
     if (argc == 1) {
         fprintf(stderr, "Usage: %s [file(s)]\n", argv[0]);
@@ -99,7 +99,7 @@ int main(int argc, char* argv[]) //
         {
             Elf64_Shdr shdr = shdrs[j];
 
-            // Find section
+            // Find output section
             size_t k = 0;
             for (; k < sections->length; ++k)
                 if (strcmp(sections->data[k].name, shstrtab + shdr.sh_name) == 0)
@@ -117,12 +117,52 @@ int main(int argc, char* argv[]) //
                 Assert(shdr.sh_addralign == sections->data[k].header.sh_addralign);
                 Assert(shdr.sh_entsize == sections->data[k].header.sh_entsize);
             }
-            // TODO what do we do with .sh_link?
 
             dynarr_align(&sections->data[k].contents, shdr.sh_addralign);
             dynarr_append(
                 &sections->data[k].contents, elfs[i] + shdr.sh_offset, shdr.sh_size);
             sections->data[k].header.sh_size = sections->data[k].contents->length;
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Apply relocations
+
+    for (size_t i = 0; i < elfs_length; ++i)
+    {
+        Elf64_Ehdr ehdr = *(ehdrs[i]);
+        Elf64_Shdr* shdrs = elfs[i] + ehdr.e_shoff;
+        const char* shstrtab = elfs[i] + shdrs[ehdr.e_shstrndx].sh_offset;
+
+        for (size_t j = 0; j < ehdr.e_shnum; ++j)
+        {
+            Elf64_Shdr shdr = shdrs[j];
+            if (shdr.sh_type != SHT_REL && shdr.sh_type != SHT_RELA)
+                continue;
+
+            union {
+                Elf64_Rel*  /*r*/els;
+                Elf64_Rela* /*r*/elas;
+            } r = {.elas = elfs[i] + shdr.sh_offset };
+
+            Elf64_Shdr shdr_symtab = shdrs[shdr.sh_link];
+            Elf64_Shdr shdr_target = shdrs[shdr.sh_info]; // e.g. .text
+
+            Elf64_Sym* symtab = elfs[i] + shdr_symtab.sh_offset;
+
+            size_t rels_length = shdr.sh_size / shdr.sh_entsize;
+            for (size_t k = 0; k < rels_length; ++k)
+            {
+                Elf64_Rela rela = {0};
+                if (shdr.sh_type == SHT_RELA)
+                    rela = r.elas[k];
+                else
+                    memcpy(&rela, &r.els[k], sizeof r.els[k]);
+
+                Elf64_Sym rel_sym = symtab[ELF64_R_SYM(rela.r_info)];
+                Elf64_Xword rel_type = ELF64_R_TYPE(rela.r_info);
+                (volatile int){0} = 0;
+            }
         }
     }
 
