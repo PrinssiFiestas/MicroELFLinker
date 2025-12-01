@@ -123,48 +123,7 @@ int main(int argc, char* argv[])
                 &sections->data[k].contents, elfs[i] + shdr.sh_offset, shdr.sh_size);
             sections->data[k].header.sh_size = sections->data[k].contents->length;
         }
-    }
-
-    // ------------------------------------------------------------------------
-    // Apply relocations
-
-    for (size_t i = 0; i < elfs_length; ++i)
-    {
-        Elf64_Ehdr ehdr = *(ehdrs[i]);
-        Elf64_Shdr* shdrs = elfs[i] + ehdr.e_shoff;
-        const char* shstrtab = elfs[i] + shdrs[ehdr.e_shstrndx].sh_offset;
-
-        for (size_t j = 0; j < ehdr.e_shnum; ++j)
-        {
-            Elf64_Shdr shdr = shdrs[j];
-            if (shdr.sh_type != SHT_REL && shdr.sh_type != SHT_RELA)
-                continue;
-
-            union {
-                Elf64_Rel*  /*r*/els;
-                Elf64_Rela* /*r*/elas;
-            } r = {.elas = elfs[i] + shdr.sh_offset };
-
-            Elf64_Shdr shdr_symtab = shdrs[shdr.sh_link];
-            Elf64_Shdr shdr_target = shdrs[shdr.sh_info]; // e.g. .text
-
-            Elf64_Sym* symtab = elfs[i] + shdr_symtab.sh_offset;
-
-            size_t rels_length = shdr.sh_size / shdr.sh_entsize;
-            for (size_t k = 0; k < rels_length; ++k)
-            {
-                Elf64_Rela rela = {0};
-                if (shdr.sh_type == SHT_RELA)
-                    rela = r.elas[k];
-                else
-                    memcpy(&rela, &r.els[k], sizeof r.els[k]);
-
-                Elf64_Sym rel_sym = symtab[ELF64_R_SYM(rela.r_info)];
-                Elf64_Xword rel_type = ELF64_R_TYPE(rela.r_info);
-                (volatile int){0} = 0;
-            }
-        }
-    }
+    } // TODO Update all symbol values and relocation offsets.
 
     // ------------------------------------------------------------------------
     // Create segments
@@ -235,6 +194,8 @@ int main(int argc, char* argv[])
                 voffset,
                 0x1000);
         }
+
+        dynarr_align(&segments->data[k].contents, sect->header.sh_addralign);
 
         // Note: segment offset for first segment is incorrect here (missing
         // program header table size and section header table size) because we
@@ -333,8 +294,65 @@ int main(int argc, char* argv[])
         else
             secs[i].sh_addr = 0;
     }
+    Elf64_Shdr syms_shdr = {0};
+    Elf64_Sym* syms = NULL;
+    for (size_t i = 0; i < sections->length; ++i) {
+        if (secs[i].sh_type == SHT_SYMTAB) {
+            Assert(syms == NULL, "Only one symbol table expected.\n");
+            syms_shdr = secs[i];
+            syms = (Elf64_Sym*)(out_data->data + secs[i].sh_offset);
+        }
+    }
 
+    // ------------------------------------------------------------------------
+    // Apply relocations
+
+    // Update symbol values before applying relocations.
+    for (size_t i = 0; i < syms_shdr.sh_size/syms_shdr.sh_entsize; ++i)
+        if (syms[i].st_shndx < SHN_LOPROC)
+            syms[i].st_value += secs[syms[i].st_shndx].sh_addr;
+
+    // Apply relocations
+    for (size_t i = 0; i < sections->length; ++i)
+    {
+        if (secs[i].sh_type != SHT_RELA)
+            continue;
+        const char* sect_name = sections->data[i].name;
+
+        void* rel_sect_data = NULL;
+        for (size_t j = 0; j < sections->length; ++j) {
+            const char* name = sections->data[j].name;
+            if (strcmp(sect_name + strlen(".rela"), name) == 0) {
+                rel_sect_data = out_data->data + secs[j].sh_offset;
+                break;
+            }
+        }
+
+        Elf64_Shdr  rels_shdr = secs[i];
+        Elf64_Rela* rels = (Elf64_Rela*)(out_data->data + secs[i].sh_offset);
+        for (size_t j = 0; j < rels_shdr.sh_size/rels_shdr.sh_entsize; ++j)
+        {
+            uint32_t dword;
+            uint64_t qword;
+            Elf64_Rela rel = rels[j];
+            Elf64_Xword type = ELF64_R_TYPE(rel.r_info);
+            Elf64_Xword i_sym = ELF64_R_SYM(rel.r_info);
+            Elf64_Sym sym = syms[i_sym];
+            void* target = rel_sect_data + rel.r_offset;
+
+            switch (type)
+            {
+            case R_X86_64_32: case R_X86_64_32S:
+                dword = sym.st_value + rel.r_addend;
+                memcpy(target, &dword, sizeof dword);
+                break;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
     // Finally, write the actual output file. // TODO -o flag
+
     const char* out_path = "a.out";
     FILE* out_fp = fopen(out_path, "wb");
     Assert(out_fp != NULL, "fopen(): %s\n", strerror(errno));

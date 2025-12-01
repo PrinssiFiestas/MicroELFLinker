@@ -9,6 +9,10 @@
 # -----------------------------------------------------------------------------
 .section .rodata
 
+# Henlo would have offset 0 without this, which complicates ELF analysis.
+pad:
+    .ascii "pad!"
+
 msg:
     .ascii "Henlo\n"
     len = . - msg # sizeof msg
