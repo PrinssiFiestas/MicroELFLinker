@@ -19,6 +19,7 @@ typedef struct segment
 typedef struct section
 {
     const char*           name;
+    const char*           link; // section of associated string/symbol table
     size_t                segment_index;
     Elf64_Off             segment_offset;
     Elf64_Shdr            header;
@@ -82,18 +83,31 @@ int main(int argc, char* argv[])
 
     size_t elfs_length = argc - 1;
     void** elfs = xmalloc(elfs_length * sizeof elfs[0]);
-    Elf64_Ehdr** ehdrs = xmalloc(elfs_length * sizeof(void*)); // same as elfs, but casted for convenience
+    Elf64_Ehdr** ehdrs = xmalloc(elfs_length * sizeof(void*)); // same as elfs casted for convenience
 
     // ------------------------------------------------------------------------
     // Read input files and merge sections
 
-    dynarr_push(&sections, (Section){.name = ""}); // optional empty section at the start is common
+    DynArr(char) out_symstrtab = NULL;
+    dynarr_append(&out_symstrtab, "", sizeof"");
+
+    dynarr_push(&sections, ((Section){.name = "", .link = ""})); // empty section at the start is common
     for (size_t i = 0; i < elfs_length; ++i)
     {
         ehdrs[i] = elfs[i] = read_elf_file(argv[i + 1]);
-        Elf64_Ehdr ehdr = *(ehdrs[i]);
-        Elf64_Shdr* shdrs = elfs[i] + ehdr.e_shoff;
-        const char* shstrtab = elfs[i] + shdrs[ehdr.e_shstrndx].sh_offset;
+        Elf64_Ehdr  ehdr      = *(ehdrs[i]);
+        Elf64_Shdr* shdrs     = elfs[i] + ehdr.e_shoff;
+        const char* shstrtab  = elfs[i] + shdrs[ehdr.e_shstrndx].sh_offset;
+        const char* symstrtab = NULL;
+        for (size_t j = 0; j < ehdr.e_shnum; ++j) {
+            if (shdrs[j].sh_type == SHT_STRTAB
+                && strcmp(shstrtab + shdrs[j].sh_name, ".strtab") == 0
+            ) {
+                symstrtab = elfs[i] + shdrs[j].sh_offset;
+                break;
+            }
+        }
+        Assert(symstrtab != NULL, "No .strtab found in %s\n", argv[i + 1]);
 
         for (size_t j = 0; j < ehdr.e_shnum; ++j)
         {
@@ -108,22 +122,90 @@ int main(int argc, char* argv[])
             if (k == sections->length) { // no output section found, create
                 Section section = {
                     .name = shstrtab + shdr.sh_name,
+                    .link = shstrtab + shdrs[shdr.sh_link].sh_name,
                     .header = shdr
                 };
                 dynarr_push(&sections, section);
-            } else { // some of my assumptions, may not hold true for all linkers
-                Assert(shdr.sh_type == sections->data[k].header.sh_type);
-                Assert(shdr.sh_flags == sections->data[k].header.sh_flags);
-                Assert(shdr.sh_addralign == sections->data[k].header.sh_addralign);
-                Assert(shdr.sh_entsize == sections->data[k].header.sh_entsize);
+            } else {
+                Assert(shdr.sh_type == sections->data[k].header.sh_type,
+                       "Expected matching types for %s.\n", sections->data[k].name);
+                Assert(shdr.sh_flags == sections->data[k].header.sh_flags,
+                       "Expected matching flags for %s.\n", sections->data[k].name);
+                Assert(shdr.sh_addralign == sections->data[k].header.sh_addralign,
+                       "Expected matching alignment for %s\n", sections->data[k].name);
+                Assert(shdr.sh_entsize == sections->data[k].header.sh_entsize,
+                       "Expected matching entry sizes for %s\n", sections->data[k].name);
             }
 
+            dynarr_add_reserve(
+                sizeof sections->data[k].contents->data[0],
+                &sections->data[k].contents,
+                1);
+            size_t i_sym = sections->data[k].contents->length
+                / (shdr.sh_entsize + !shdr.sh_entsize);
             dynarr_align(&sections->data[k].contents, shdr.sh_addralign);
             dynarr_append(
                 &sections->data[k].contents, elfs[i] + shdr.sh_offset, shdr.sh_size);
             sections->data[k].header.sh_size = sections->data[k].contents->length;
+            size_t i_syms_end = sections->data[k].contents->length
+                / (shdr.sh_entsize + !shdr.sh_entsize);
+
+            if (shdr.sh_type == SHT_SYMTAB) for (; i_sym < i_syms_end; ++i_sym)
+            { // update all st_name
+                Elf64_Sym* syms = (Elf64_Sym*)(sections->data[k].contents->data);
+                Elf64_Sym* sym  = syms + i_sym;
+                size_t i_strtab = 0;
+                for (size_t len; i_strtab < out_symstrtab->length; i_strtab += len + sizeof"")
+                {
+                    len = strlen(out_symstrtab->data + i_strtab);
+                    if (strcmp(
+                            out_symstrtab->data + i_strtab,
+                            symstrtab + sym->st_name) == 0)
+                        break;
+                }
+
+                if (i_strtab == out_symstrtab->length) // no strtab entry found, create
+                    dynarr_append(
+                        &out_symstrtab,
+                        symstrtab + sym->st_name,
+                        strlen(symstrtab + sym->st_name) + sizeof"");
+                sym->st_name = i_strtab;
+            }
+        } // for (size_t j = 0; j < ehdr.e_shnum; ++j)
+    } // for (size_t i = 0; i < elfs_length; ++i)
+
+    // Replace symbol string table contents
+    for (size_t i = 0; i < sections->length; ++i) {
+        Section* sect = sections->data + i;
+        if (sect->header.sh_type == SHT_STRTAB && strcmp(sect->name, ".strtab") == 0)
+        {
+            free(sect->contents);
+            sect->contents = (typeof(sect->contents))out_symstrtab;
+            break;
         }
-    } // TODO Update all symbol values and relocation offsets.
+    }
+
+    // ------------------------------------------------------------------------
+    // Update indices and offsets
+
+    // Update sh_link
+    for (size_t i = 0; i < sections->length; ++i) {
+        for (size_t j = 0; j < sections->length; ++j) {
+            Section*       sect_i = sections->data + i;
+            const Section* sect_j = sections->data + j;
+            if (strcmp(sect_i->link, sect_j->name) == 0) {
+                sect_i->header.sh_link = j;
+                goto next;
+            }
+        }
+        next:;
+    }
+    // TODO Update all of these:
+    // - st_shndx
+    // - st_value
+    // - r_offset
+    // - ELF64_R_SYM(r_info)
+    // - r_addend in case of relocation symbol being a section's symbol
 
     // ------------------------------------------------------------------------
     // Create segments
