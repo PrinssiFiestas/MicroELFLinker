@@ -10,6 +10,9 @@
 # -----------------------------------------------------------------------------
 .section .rodata
 
+bar_pad9:
+    .ascii "padpadpad"
+
 bar_msg:
     .asciz "I am bar!\n"
 

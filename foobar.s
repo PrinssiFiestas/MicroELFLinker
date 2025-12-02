@@ -9,11 +9,22 @@
 # -----------------------------------------------------------------------------
 .section .rodata
 
+foobar_pad:
+    .ascii "padpad"
+
+foobar_bye:
+    .asciz "byebye\n"
+
 foobar_msg:
     .asciz "I am foobar!\n"
 
 # -----------------------------------------------------------------------------
 .section .text
+
+say_bye:
+    lea rdi, [foobar_bye]
+    call bar_puts
+    ret
 
 _start:
     lea rdi, [bar_msg]
@@ -21,6 +32,8 @@ _start:
 
     lea rdi, [foobar_msg]
     call bar_puts
+
+    call say_bye
 
     mov rax, 60 # exit(
     mov rdi, 0  #     EXIT_SUCCESS
