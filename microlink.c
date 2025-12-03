@@ -202,10 +202,11 @@ int main(int argc, char* argv[])
                 sym->st_value += sections->data[k].section_offset;
         }
 
+        #if 0
         // Update all r_offset, ELF64_R_SYM(r_info), and r_addend
         for (size_t i_sect = 0; i_sect < sections->length; ++i_sect)
         {
-            Section* rels = &sections->data[i];
+            Section* rels = &sections->data[i_sect];
             if (rels->header.sh_type != SHT_RELA)
                 continue;
 
@@ -242,6 +243,7 @@ int main(int argc, char* argv[])
                 rel->r_info = ELF64_R_INFO(i_sym, type);
             }
         }
+        #endif
     } // for (size_t i = 0; i < elfs_length; ++i)
 
     // Replace symbol string table contents
