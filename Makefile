@@ -12,10 +12,10 @@ ELFNAME = peekelf
 CC = cc
 
 all:
-	as -o hello.o -g hello.s
+	as -o hello.o hello.s
 	ld -o hello hello.o
-	as -o foobar.o -g foobar.s
-	as -o bar.o -g bar.s
+	as -o foobar.o foobar.s
+	as -o bar.o bar.s
 	ld -o foobar foobar.o bar.o
 	$(CC) -o $(LNKNAME) -Wall -Wextra -ggdb3 -gdwarf $(LNKNAME).c $(SANITIZERS)
 	$(CC) -c -Wall -Wextra -ggdb3 -gdwarf $(ELFNAME).c $(SANITIZERS)

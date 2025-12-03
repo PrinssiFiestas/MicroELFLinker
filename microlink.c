@@ -22,6 +22,7 @@ typedef struct section
     const char*           link; // section of associated string/symbol table
     size_t                segment_index;
     Elf64_Off             segment_offset;
+    Elf64_Off             section_offset; // previous length in merging loop
     Elf64_Shdr            header;
     DynArr(unsigned char) contents;
 } Section;
@@ -98,6 +99,7 @@ int main(int argc, char* argv[])
         Elf64_Ehdr  ehdr      = *(ehdrs[i]);
         Elf64_Shdr* shdrs     = elfs[i] + ehdr.e_shoff;
         const char* shstrtab  = elfs[i] + shdrs[ehdr.e_shstrndx].sh_offset;
+        size_t      i_symtab  = 0;
         const char* symstrtab = NULL;
         for (size_t j = 0; j < ehdr.e_shnum; ++j) {
             if (shdrs[j].sh_type == SHT_STRTAB
@@ -136,23 +138,28 @@ int main(int argc, char* argv[])
                 Assert(shdr.sh_entsize == sections->data[k].header.sh_entsize,
                        "Expected matching entry sizes for %s\n", sections->data[k].name);
             }
+            Section* out_sect = sections->data + k;
+            if (shdr.sh_type == SHT_SYMTAB)
+                i_symtab = k;
 
-            dynarr_add_reserve(
-                sizeof sections->data[k].contents->data[0],
-                &sections->data[k].contents,
-                1);
-            size_t i_sym = sections->data[k].contents->length
-                / (shdr.sh_entsize + !shdr.sh_entsize);
-            dynarr_align(&sections->data[k].contents, shdr.sh_addralign);
+            size_t i_syms_start = 0;
+            if (out_sect->contents != NULL) {
+                i_syms_start = out_sect->contents->length / (shdr.sh_entsize + !shdr.sh_entsize);
+                out_sect->section_offset = out_sect->contents->length;
+            }
+            size_t i_sym = i_syms_start;
+
+            dynarr_align(&out_sect->contents, shdr.sh_addralign);
             dynarr_append(
-                &sections->data[k].contents, elfs[i] + shdr.sh_offset, shdr.sh_size);
-            sections->data[k].header.sh_size = sections->data[k].contents->length;
-            size_t i_syms_end = sections->data[k].contents->length
+                &out_sect->contents, elfs[i] + shdr.sh_offset, shdr.sh_size);
+            out_sect->header.sh_size = out_sect->contents->length;
+
+            size_t i_syms_end = out_sect->contents->length
                 / (shdr.sh_entsize + !shdr.sh_entsize);
 
             if (shdr.sh_type == SHT_SYMTAB) for (; i_sym < i_syms_end; ++i_sym)
             { // update all st_name
-                Elf64_Sym* syms = (Elf64_Sym*)(sections->data[k].contents->data);
+                Elf64_Sym* syms = (Elf64_Sym*)(out_sect->contents->data);
                 Elf64_Sym* sym  = syms + i_sym;
                 size_t i_strtab = 0;
                 for (size_t len; i_strtab < out_symstrtab->length; i_strtab += len + sizeof"")
@@ -172,6 +179,69 @@ int main(int argc, char* argv[])
                 sym->st_name = i_strtab;
             }
         } // for (size_t j = 0; j < ehdr.e_shnum; ++j)
+
+        // Update all st_shndx and st_value
+        Section* syms = &sections->data[i_symtab];
+        for (size_t j = syms->section_offset;
+            j < syms->contents->length;
+            j += syms->header.sh_entsize)
+        {
+            Elf64_Sym* sym = (Elf64_Sym*)(syms->contents->data + j);
+            if (sym->st_shndx >= SHN_LOPROC)
+                continue;
+
+            size_t k = 0;
+            for (; k < sections->length; ++k)
+                if (strcmp(
+                    sections->data[k].name,
+                    shstrtab + shdrs[sym->st_shndx].sh_name) == 0)
+                break;
+
+            sym->st_shndx = k;
+            if (ELF64_ST_TYPE(sym->st_info) != STT_SECTION)
+                sym->st_value += sections->data[k].section_offset;
+        }
+
+        // Update all r_offset, ELF64_R_SYM(r_info), and r_addend
+        for (size_t i_sect = 0; i_sect < sections->length; ++i_sect)
+        {
+            Section* rels = &sections->data[i];
+            if (rels->header.sh_type != SHT_RELA)
+                continue;
+
+            size_t section_offset = 0;
+            for (size_t k = 0; k < sections->length; ++k) {
+                if (strcmp(
+                        sections->data[k].name,
+                        rels->name + strlen(".rela")) == 0)
+                {
+                    section_offset = sections->data[k].section_offset;
+                    break;
+                }
+            }
+
+            for (size_t j = rels->section_offset;
+                j < rels->contents->length;
+                j += rels->header.sh_entsize)
+            {
+                Elf64_Rela* rel = (Elf64_Rela*)(rels->contents->data + j);
+                rel->r_offset += section_offset;
+
+                Elf64_Xword i_sym = ELF64_R_SYM(rel->r_info);
+                Elf64_Xword type = ELF64_R_TYPE(rel->r_info);
+                Elf64_Xword i_sym_offset = syms->section_offset/syms->header.sh_entsize;
+                Elf64_Sym*  symtab = (Elf64_Sym*)syms->contents->data;
+                Elf64_Sym   sym    = symtab[i_sym_offset + i_sym];
+
+                // as uses sections with addends for known data instead of
+                // symbols directly for whatever reason.
+                if (ELF64_ST_TYPE(sym.st_info) == STT_SECTION)
+                    rel->r_addend += sections->data[sym.st_shndx].section_offset;
+
+                i_sym += i_sym_offset;
+                rel->r_info = ELF64_R_INFO(i_sym, type);
+            }
+        }
     } // for (size_t i = 0; i < elfs_length; ++i)
 
     // Replace symbol string table contents
@@ -185,27 +255,69 @@ int main(int argc, char* argv[])
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Update indices and offsets
-
     // Update sh_link
     for (size_t i = 0; i < sections->length; ++i) {
         for (size_t j = 0; j < sections->length; ++j) {
-            Section*       sect_i = sections->data + i;
-            const Section* sect_j = sections->data + j;
-            if (strcmp(sect_i->link, sect_j->name) == 0) {
+            Section* sect_i = &sections->data[i];
+            Section  sect_j =  sections->data[j];
+            if (strcmp(sect_i->link, sect_j.name) == 0) {
                 sect_i->header.sh_link = j;
                 goto next;
             }
         }
         next:;
     }
-    // TODO Update all of these:
-    // - st_shndx
-    // - st_value
-    // - r_offset
-    // - ELF64_R_SYM(r_info)
-    // - r_addend in case of relocation symbol being a section's symbol
+
+    // Resolve undefined symbols
+    for (size_t i = 0; i < sections->length; ++i) {
+        Section* sect = &sections->data[i];
+        if (sect->header.sh_type != SHT_SYMTAB)
+            continue;
+
+        Elf64_Sym* syms = (Elf64_Sym*)(sect->contents->data);
+        size_t syms_length = sect->header.sh_size / sect->header.sh_entsize;
+        for (size_t j = 0; j < syms_length; ++j)
+        {
+            // Silence readelf warnings. (don't do this)
+            if (ELF64_ST_BIND(syms[j].st_info) == STB_LOCAL)
+                sect->header.sh_info = j + 1;
+
+            // Enforce ODR
+            if (ELF64_ST_BIND(syms[j].st_info) == STB_GLOBAL && syms[j].st_shndx != SHN_UNDEF)
+                for (size_t k = j + 1; k < syms_length; ++k)
+                    if (syms[k].st_shndx != SHN_UNDEF && strcmp(
+                        out_symstrtab->data + syms[j].st_name,
+                        out_symstrtab->data + syms[k].st_name) == 0
+                    )
+                        Assert(
+                            ELF64_ST_BIND(syms[k].st_info) != STB_GLOBAL,
+                               "Multiple definitions of %s\n",
+                               out_symstrtab->data + syms[j].st_name);
+
+            if (syms[j].st_shndx != SHN_UNDEF)
+                continue;
+            if (out_symstrtab->data[syms[j].st_name] == '\0') // empty symbol
+                continue;
+
+            // Find first defined
+            size_t k = 0;
+            for (; k < syms_length; ++k)
+                if (syms[k].st_shndx != SHN_UNDEF
+                    && ELF64_ST_BIND(syms[k].st_info) != STB_LOCAL
+                    && strcmp(
+                        out_symstrtab->data + syms[j].st_name,
+                        out_symstrtab->data + syms[k].st_name) == 0)
+                    break;
+            Assert(k != syms_length, "Undefined reference to %s\n",
+                out_symstrtab->data + syms[j].st_name);
+
+            // Final symbol resolution. We'll have duplicate symbols at this
+            // point, which is fine, they can be cleaned up later (if we care).
+            syms[j] = syms[k];
+        }
+
+        break;
+    }
 
     // ------------------------------------------------------------------------
     // Create segments
@@ -299,14 +411,11 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------------------
     // Create final output
 
-    Elf64_Addr entry_offset = 0x1000; // TODO fix hard coded address
-
     Elf64_Ehdr out_ehdr = {
         .e_ident     = { 0x7F, 'E', 'L', 'F', ELFCLASS64, ELFDATA2LSB, EV_CURRENT },
         .e_type      = ET_EXEC,
         .e_machine   = EM_X86_64,
         .e_version   = EV_CURRENT,
-        .e_entry     = voffset + entry_offset,
         .e_shoff     = sizeof out_ehdr + segments->length * sizeof(Elf64_Phdr),
         .e_phoff     = sizeof out_ehdr,
         .e_flags     = 0,
@@ -376,6 +485,11 @@ int main(int argc, char* argv[])
         else
             secs[i].sh_addr = 0;
     }
+
+    // ------------------------------------------------------------------------
+    // Apply relocations
+
+    // Get symbol table
     Elf64_Shdr syms_shdr = {0};
     Elf64_Sym* syms = NULL;
     for (size_t i = 0; i < sections->length; ++i) {
@@ -386,13 +500,13 @@ int main(int argc, char* argv[])
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Apply relocations
-
     // Update symbol values before applying relocations.
-    for (size_t i = 0; i < syms_shdr.sh_size/syms_shdr.sh_entsize; ++i)
+    for (size_t i = 0; i < syms_shdr.sh_size/syms_shdr.sh_entsize; ++i) {
         if (syms[i].st_shndx < SHN_LOPROC)
             syms[i].st_value += secs[syms[i].st_shndx].sh_addr;
+        if (strcmp(out_symstrtab->data + syms[i].st_name, "_start") == 0)
+            ((Elf64_Ehdr*)out_data->data)->e_entry = syms[i].st_value;
+    }
 
     // Apply relocations
     for (size_t i = 0; i < sections->length; ++i)
@@ -428,8 +542,30 @@ int main(int argc, char* argv[])
                 dword = sym.st_value + rel.r_addend;
                 memcpy(target, &dword, sizeof dword);
                 break;
+
+            case R_X86_64_64:
+                qword = sym.st_value + rel.r_addend;
+                memcpy(target, &qword, sizeof qword);
+                break;
+
+            // Note: we don't have a PLT, we just use symbol value instead.
+            // Also note that we prematurely added symbol address to it's value,
+            // so we have to compensate.
+            case R_X86_64_PLT32: case R_X86_64_PC32:
+                dword = sym.st_value + rel.r_addend - rel.r_offset
+                    - secs[sym.st_shndx].sh_addr;
+                memcpy(target, &dword, sizeof dword);
+                break;
+
+            case R_X86_64_PC64:
+                qword = sym.st_value + rel.r_addend - rel.r_offset;
+                memcpy(target, &qword, sizeof qword);
+                break;
             }
         }
+
+        // Prevent loader from doing relocation fixups at load time.
+        secs[i].sh_size = 0;
     }
 
     // ------------------------------------------------------------------------
