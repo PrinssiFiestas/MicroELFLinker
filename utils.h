@@ -10,11 +10,11 @@
 #include <string.h>
 #include <errno.h>
 
-#define DynArr(TYPE) struct   \
-{                             \
-    size_t length;            \
-    size_t capacity;          \
-    typeof((TYPE){0}) data[]; \
+#define DynArr(...) struct           \
+{                                    \
+    size_t length;                   \
+    size_t capacity;                 \
+    typeof((__VA_ARGS__){0}) data[]; \
 }*
 
 #define dynarr_push(DARR_PTR, ELEM) \
