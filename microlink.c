@@ -427,8 +427,10 @@ int main(int argc, char* argv[])
             dynarr_push(&out_symtab, sym);
         }
     }
-    out_sections->data[symtab_index].header.sh_size = out_symtab->length * sizeof(Elf64_Sym);
-    out_sections->data[symtab_index].contents       = out_symtab->data;
+    out_sections->data[symtab_index].header.sh_size    = out_symtab->length * sizeof(Elf64_Sym);
+    out_sections->data[symtab_index].contents          = out_symtab->data;
+    out_sections->data[symstrtab_index].header.sh_size = out_symstrtab->length;
+    out_sections->data[symstrtab_index].contents       = out_symstrtab->data;
 
     // Create symbol hash map. We use DynArr and a struct that can be used for
     // index_of() macro.
@@ -756,6 +758,9 @@ int main(int argc, char* argv[])
                 break;
             }
         }
+
+        // Prevent loader from doing relocation fixups at load time.
+        secs[i_rel_sect].sh_size = 0;
     }
 
     // ------------------------------------------------------------------------
