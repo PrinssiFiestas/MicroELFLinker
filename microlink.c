@@ -681,6 +681,8 @@ int main(int argc, char* argv[])
         phdrs[i].p_vaddr += out_data->length;
         phdrs[i].p_paddr += out_data->length;
         dynarr_append(&out_data, seg.contents->data, seg.contents->length);
+        if (seg.contents->length == 0) // force unique offset for empty segments
+            dynarr_push(&out_data, '\0');
     }
 
     // All data has been written so we know all file offsets, so now we can
