@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdalign.h>
 
 #ifdef __SANITIZE_ADDRESS__
@@ -151,6 +152,22 @@ void* read_elf_file(const char* path)
     /* return */_i;                                               \
 })
 
+// Concatenating sections moves indices for symbols, relocations, and other
+// data. Use this to calculate new indices.
+size_t section_offset(Elf64_Shdr** in_shdrs, size_t i_file, size_t i_sect)
+{
+    size_t section_offset = 0;
+    for (size_t i = 0; i < i_file; ++i) {
+        // Conceptually i+1 aligns the previous file's section offset.
+        // Note that alignment of the same section might differ for each input.
+        // For example GCC has 8 for char arrays, GNU assembler only has 1.
+        section_offset = round_to_aligned(
+            section_offset, in_shdrs[i + 1][i_sect].sh_addralign);
+        section_offset += in_shdrs[i][i_sect].sh_size;
+    }
+    return section_offset;
+}
+
 // ----------------------------------------------------------------------------
 // main (duh...)
 
@@ -260,13 +277,14 @@ int main(int argc, char* argv[])
             }
             else {
                 user_assert(out_sections->data[k].header.sh_type == shdr.sh_type,
-                    "Expected matching types for %s.\n", out_sections->data[k].name);
+                    "Expected matching types for %s section.\n", out_sections->data[k].name);
                 user_assert(out_sections->data[k].header.sh_flags == shdr.sh_flags,
-                    "Expected matching flags for %s.\n", out_sections->data[k].name);
-                user_assert(out_sections->data[k].header.sh_addralign == shdr.sh_addralign,
-                    "Expected matching alignment for %s.\n", out_sections->data[k].name);
+                    "Expected matching flags for %s section.\n", out_sections->data[k].name);
                 user_assert(out_sections->data[k].header.sh_entsize == shdr.sh_entsize,
-                    "Expected matching entry sizes for %s.\n", out_sections->data[k].name);
+                    "Expected matching entry sizes for %s section.\n", out_sections->data[k].name);
+
+                if (shdr.sh_addralign > out_sections->data[k].header.sh_addralign)
+                    out_sections->data[k].header.sh_addralign = shdr.sh_addralign;
             }
         }
     }
@@ -283,7 +301,6 @@ int main(int argc, char* argv[])
         const Elf64_Shdr* shdrs    = in_elfs[i] + ehdr.e_shoff;
         const char*       shstrtab = in_shstrtabs[i];;
 
-        // TODO these are square matrices, allocate with variably modified types.
         in_shdrs[i]             = g_alloc(out_sections->length * sizeof in_shdrs[i][0]);
         in_section_contents[i]  = g_alloc(out_sections->length * sizeof in_section_contents[i][0]);
         memset(in_shdrs[i],            0, out_sections->length * sizeof in_shdrs[i][0]);
@@ -349,10 +366,10 @@ int main(int argc, char* argv[])
     // put locals first, then globals. This is enforced somewhere below. Weaks
     // not handled for now.
 
-    for (size_t i = 0; i < in_elfs_length; ++i) // locals first
+    for (size_t i_file = 0; i_file < in_elfs_length; ++i_file) // locals first
     {
-        const Elf64_Sym* syms = in_section_contents[i][symtab_index];
-        size_t locals_length = in_shdrs[i][symtab_index].sh_info;
+        const Elf64_Sym* syms = in_section_contents[i_file][symtab_index];
+        size_t locals_length = in_shdrs[i_file][symtab_index].sh_info;
 
         // Different translation units may have local (C static) symbols with
         // the same name. We have to be able to identify them during relocation.
@@ -363,18 +380,18 @@ int main(int argc, char* argv[])
             .st_other = STV_DEFAULT,
             .st_shndx = SHN_ABS,
         }));
-        dynarr_append(&out_symstrtab, in_paths[i], strlen(in_paths[i]) + sizeof"");
+        dynarr_append(&out_symstrtab, in_paths[i_file], strlen(in_paths[i_file]) + sizeof"");
 
         // Update and push all local symbols.
         for (size_t j = 1/*skip empty*/; j < locals_length; ++j)
         {
             Elf64_Sym sym = syms[j];
-            const char* sym_name = in_section_contents[i][symstrtab_index] + sym.st_name;
+            const char* sym_name = in_section_contents[i_file][symstrtab_index] + sym.st_name;
             if (sym_name[0] == '\0' && ELF64_ST_TYPE(sym.st_info) == STT_SECTION)
             {   // GNU assembler does not assign a name for section symbols
                 // presumably to save memory. This will be inconvenient for us
                 // during relocations, let's fix that.
-                size_t k = in_to_out_section_index[i][sym.st_shndx];
+                size_t k = in_to_out_section_index[i_file][sym.st_shndx];
                 sym_name = out_sections->data[k].name;
             }
             sym.st_name = out_symstrtab->length;
@@ -382,36 +399,29 @@ int main(int argc, char* argv[])
 
             // Update section index and symbol value
             if (sym.st_shndx < SHN_LORESERVE) {
-                size_t k = in_to_out_section_index[i][sym.st_shndx];
-                sym.st_shndx = k;
+                size_t i_sym_sect = in_to_out_section_index[i_file][sym.st_shndx];
+                sym.st_shndx = i_sym_sect;
 
-                // Concatenating sections moves symbols (other than section
-                // symbols themselves), calculate offset and update value.
-                size_t section_offset = 0;
                 if (ELF64_ST_TYPE(sym.st_info) != STT_SECTION)
-                    for (size_t h = 0; h < i; ++h)
-                        section_offset += round_to_aligned(
-                            in_shdrs[h][k].sh_size,
-                            in_shdrs[h][k].sh_addralign);
-                sym.st_value += section_offset;
+                    sym.st_value += section_offset(in_shdrs, i_file, i_sym_sect);
             }
 
             dynarr_push(&out_symtab, sym);
         }
     }
     out_sections->data[symtab_index].header.sh_info = out_symtab->length;
-    for (size_t i = 0; i < in_elfs_length; ++i) // globals last
+    for (size_t i_file = 0; i_file < in_elfs_length; ++i_file) // globals last
     {
-        const Elf64_Sym* syms = in_section_contents[i][symtab_index];
-        size_t syms_length = in_shdrs[i][symtab_index].sh_size / sizeof syms[0];
-        size_t locals_length = in_shdrs[i][symtab_index].sh_info;
+        const Elf64_Sym* syms = in_section_contents[i_file][symtab_index];
+        size_t syms_length = in_shdrs[i_file][symtab_index].sh_size / sizeof syms[0];
+        size_t locals_length = in_shdrs[i_file][symtab_index].sh_info;
         for (size_t j = locals_length; j < syms_length; ++j)
         {
             Elf64_Sym sym = syms[j];
-            const char* sym_name = in_section_contents[i][symstrtab_index] + sym.st_name;
+            const char* sym_name = in_section_contents[i_file][symstrtab_index] + sym.st_name;
             user_assert(ELF64_ST_BIND(sym.st_info) != STB_LOCAL,
                 "Local symbol %s found after sh_info %zu in %s.\n",
-                sym_name, locals_length, in_paths[i]);
+                sym_name, locals_length, in_paths[i_file]);
             if (sym.st_shndx == SHN_UNDEF) // symbol undefined
                 continue;
 
@@ -419,15 +429,9 @@ int main(int argc, char* argv[])
             dynarr_append(&out_symstrtab, sym_name, strlen(sym_name) + sizeof"");
 
             if (sym.st_shndx < SHN_LORESERVE) {
-                size_t k = in_to_out_section_index[i][sym.st_shndx];
-                sym.st_shndx = k;
-
-                size_t section_offset = 0;
-                for (size_t h = 0; h < i; ++h)
-                    section_offset += round_to_aligned(
-                        in_shdrs[h][k].sh_size,
-                        in_shdrs[h][k].sh_addralign);
-                sym.st_value += section_offset;
+                size_t i_sym_sect = in_to_out_section_index[i_file][sym.st_shndx];
+                sym.st_shndx = i_sym_sect;
+                sym.st_value += section_offset(in_shdrs, i_file, i_sym_sect);
             }
 
             dynarr_push(&out_symtab, sym);
@@ -452,21 +456,21 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------------------
     // Merge relocation tables.
 
-    for (size_t i = 0; i < rel_indices_length; ++i)
+    for (size_t i_rel = 0; i_rel < rel_indices_length; ++i_rel)
     {
-        Section* sect = &out_sections->data[rel_indices[i]];
+        Section* sect = &out_sections->data[rel_indices[i_rel]];
         Assert(sect->contents == NULL,    "Sanity check.");
         Assert(sect->header.sh_size == 0, "Sanity check.");
         for (size_t j = 0; j < in_elfs_length; ++j)
-            sect->header.sh_size += in_shdrs[j][rel_indices[i]].sh_size;
+            sect->header.sh_size += in_shdrs[j][rel_indices[i_rel]].sh_size;
         Elf64_Rela* out = sect->contents = g_alloc(sect->header.sh_size);
         size_t out_length = 0;
 
-        for (size_t j = 0; j < in_elfs_length; ++j)
+        for (size_t i_file = 0; i_file < in_elfs_length; ++i_file)
         {
-            Elf64_Shdr        rels_shdr   = in_shdrs[j][rel_indices[i]];
-            const Elf64_Rela* rels        = in_section_contents[j][rel_indices[i]];
-            const char*       rels_name   = in_shstrtabs[j] + rels_shdr.sh_name;
+            Elf64_Shdr        rels_shdr   = in_shdrs[i_file][rel_indices[i_rel]];
+            const Elf64_Rela* rels        = in_section_contents[i_file][rel_indices[i_rel]];
+            const char*       rels_name   = in_shstrtabs[i_file] + rels_shdr.sh_name;
             size_t            rels_length = rels_shdr.sh_size / sizeof rels[0];
             for (size_t k = 0; k < rels_length; ++k)
             {
@@ -475,20 +479,17 @@ int main(int argc, char* argv[])
                 // Update r_offset
                 size_t i_target = index_of(
                     out_sections, 0, rels_name + strlen(".rela"), NULL);
-                for (size_t h = 0; h < j; ++h)
-                    rel.r_offset += round_to_aligned(
-                        in_shdrs[h][i_target].sh_size,
-                        in_shdrs[h][i_target].sh_addralign);
+                rel.r_offset += section_offset(in_shdrs, i_file, i_target);
 
                 // Input symbol
                 Elf64_Xword i_sym = ELF64_R_SYM(rel.r_info);
                 Elf64_Xword type = ELF64_R_TYPE(rel.r_info);
-                const Elf64_Sym* syms = in_section_contents[j][symtab_index];
+                const Elf64_Sym* syms = in_section_contents[i_file][symtab_index];
                 Elf64_Sym sym = syms[i_sym];
-                const char* name = in_section_contents[j][symstrtab_index] + sym.st_name;
+                const char* name = in_section_contents[i_file][symstrtab_index] + sym.st_name;
                 if (name[0] == '\0' && ELF64_ST_TYPE(sym.st_info) == STT_SECTION)
                 {   // Again, section symbols have no name, let's fix that.
-                    size_t k = in_to_out_section_index[j][sym.st_shndx];
+                    size_t k = in_to_out_section_index[i_file][sym.st_shndx];
                     name = out_sections->data[k].name;
                 }
 
@@ -496,23 +497,26 @@ int main(int argc, char* argv[])
                 size_t map_offset = 1; // cannot be empty, start from 1
                 if (ELF64_ST_BIND(sym.st_info) == STB_GLOBAL)
                     map_offset = out_sections->data[symtab_index].header.sh_info;
-                else for (size_t h = 0; h < j; ++h)
+                else for (size_t h = 0; h < i_file; ++h)
                     map_offset += in_shdrs[h][symtab_index].sh_info
                         + 1 // skip file symbol
                         ;
                 i_sym = index_of(sym_map, map_offset, name, NULL);
                 user_assert(i_sym < sym_map->length, "Undefined reference to %s.\n", name);
-                Assert(sym.st_info == out_symtab->data[i_sym].st_info,
-                       "Failed relocation symbol matching.\n");
+
+                // TODO
+                //if (ELF64_ST_TYPE(sym.st_info) != STT_NOTYPE)
+                //    Assert(sym.st_info == out_symtab->data[i_sym].st_info,
+                //        "Failed relocation symbol matching for %s symbol.\n", name);
+                //else
+                //    Assert(sym.st_info == out_symtab->data[i_sym].st_info,
+                //           "Failed relocation symbol matching for %s symbol.\n", name);
 
                 // GNU assembler sometimes replaces data symbols with section
                 // symbols with addends for whatever reason.
                 if (ELF64_ST_TYPE(sym.st_info) == STT_SECTION) {
-                    size_t i_sect = in_to_out_section_index[j][sym.st_shndx];
-                    for (size_t h = 0; h < j; ++h)
-                        rel.r_addend += round_to_aligned(
-                            in_shdrs[h][i_sect].sh_size,
-                            in_shdrs[h][i_sect].sh_addralign);
+                    size_t i_sect = in_to_out_section_index[i_file][sym.st_shndx];
+                    rel.r_addend += section_offset(in_shdrs, i_file, i_sect);
                 }
 
                 rel.r_info = ELF64_R_INFO(i_sym, type);
@@ -540,6 +544,8 @@ int main(int argc, char* argv[])
         size_t total_size = 0;
         for (size_t j = 0; j < in_elfs_length; ++j) {
             Elf64_Shdr shdr = in_shdrs[j][i];
+            // Note: rounding for allocation must be done on max alignment,
+            // which is output alignment.
             total_size += round_to_aligned(shdr.sh_size, sect->header.sh_addralign);
         }
         sect->contents = g_alloc(total_size);
@@ -547,11 +553,13 @@ int main(int argc, char* argv[])
         // Concatenate
         for (size_t j = 0; j < in_elfs_length; ++j) {
             Elf64_Shdr shdr = in_shdrs[j][i];
+            sect->header.sh_size = round_to_aligned(
+                sect->header.sh_size, in_shdrs[j][i].sh_addralign);
             memcpy(
                 sect->contents + sect->header.sh_size,
                 in_section_contents[j][i],
                 shdr.sh_size);
-            sect->header.sh_size += round_to_aligned(shdr.sh_size, sect->header.sh_addralign);
+            sect->header.sh_size += shdr.sh_size;
         }
     }
 
@@ -674,6 +682,8 @@ int main(int argc, char* argv[])
     for (size_t i = 1; i < segments->length; ++i)
     {
         Segment seg = segments->data[i];
+        if (seg.contents == NULL)
+            dynarr_add_reserve(sizeof seg.contents->data[0], &seg.contents, 1);
 
         dynarr_align(&out_data, seg.header.p_align);
         Elf64_Phdr* phdrs = (Elf64_Phdr*)(out_data->data + out_ehdr.e_phoff);
@@ -752,11 +762,14 @@ int main(int argc, char* argv[])
                 memcpy(target, &qword, sizeof qword);
                 break;
 
-            // Note: we don't have a PLT, we just use symbol value instead.
-            // Also note that we prematurely added symbol address to it's value,
-            // so we have to compensate.
-            case R_X86_64_PLT32: case R_X86_64_PC32:
-                dword = sym.st_value + rel.r_addend - rel.r_offset - secs[sym.st_shndx].sh_addr;
+            case R_X86_64_PLT32:
+                dword = sym.st_value + rel.r_addend - (rel.r_offset + secs[sym.st_shndx].sh_addr);
+                memcpy(target, &dword, sizeof dword);
+                break;
+
+            case R_X86_64_PC32: // TODO these are wrong!
+                //dword = sym.st_value + rel.r_addend - (rel.r_offset + secs[rels_shdr.sh_info].sh_addr);
+                dword = sym.st_value + rel.r_addend - (rel.r_offset + secs[i_sect_target].sh_addr);
                 memcpy(target, &dword, sizeof dword);
                 break;
 

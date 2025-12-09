@@ -5,6 +5,7 @@
 .intel_syntax noprefix
 
 .global _start
+.global foobar_walrus
 
 # -----------------------------------------------------------------------------
 .section .rodata
@@ -17,6 +18,9 @@ foobar_bye:
 
 foobar_msg:
     .asciz "I am foobar!\n"
+
+foobar_walrus:
+    .asciz "Walrus\n"
 
 # -----------------------------------------------------------------------------
 .section .text
@@ -32,6 +36,8 @@ _start:
 
     lea rdi, [foobar_msg]
     call bar_puts
+
+    call foo_walrus
 
     call say_bye
 

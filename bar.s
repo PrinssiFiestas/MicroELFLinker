@@ -2,6 +2,8 @@
 # Copyright (c) 2025 Lauri Lorenzo Fiestas
 # https://github.com/PrinssiFiestas/MicroELFLinker/blob/main/LICENSE
 
+# TODO random relocation for testing purposes
+
 .intel_syntax noprefix
 
 .global bar_puts

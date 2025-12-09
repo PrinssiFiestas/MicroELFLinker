@@ -13,10 +13,9 @@ CC = cc
 
 all:
 	as -o hello.o hello.s
-	ld -o hello hello.o
+	$(CC) -o foo.o -c foo.c -Os -no-pie -ansi -nolibc
 	as -o foobar.o foobar.s
 	as -o bar.o bar.s
-	ld -o foobar foobar.o bar.o
 	$(CC) -o $(LNKNAME) -Wall -Wextra -ggdb3 -gdwarf $(LNKNAME).c $(SANITIZERS)
 	$(CC) -c -Wall -Wextra -ggdb3 -gdwarf $(ELFNAME).c $(SANITIZERS)
 	$(CC) -o $(ELFNAME) $(ELFNAME).o $(SANITIZERS)
