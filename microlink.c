@@ -216,16 +216,16 @@ int main(int argc, char* argv[])
     const char**  in_symstrtabs       = g_alloc(in_elfs_length * sizeof in_symstrtabs[0]);
 
     CLEANUP DynArr(Section) out_sections = NULL;
-    dynarr_push(&out_sections, ((Section){.name = "", .link = ""})); // first section is null
+    dynarr_push(&out_sections, ((Section){.name = "", .hash = str_hash(""), .link = ""}));
 
     // Most section contents will be appended, but these will be built from
     // scratch.
     CLEANUP DynArr(char)      out_shstrtab  = NULL;
     CLEANUP DynArr(char)      out_symstrtab = NULL;
     CLEANUP DynArr(Elf64_Sym) out_symtab    = NULL;
-    dynarr_push(&out_shstrtab,  '\0');        // first section is null
-    dynarr_push(&out_symstrtab, '\0');        // first symbol is null
-    dynarr_push(&out_symtab, (Elf64_Sym){0}); // first symbol is null
+    dynarr_push(&out_shstrtab,  '\0');
+    dynarr_push(&out_symstrtab, '\0');
+    dynarr_push(&out_symtab, (Elf64_Sym){0});
 
     size_t    rel_indices_length = 0;
     unsigned* rel_indices        = NULL;
@@ -273,7 +273,7 @@ int main(int argc, char* argv[])
 
     // Use this to find output section index given any input file's section
     // index.
-    unsigned (*in_to_out_section_index)[out_sections->length]
+    unsigned(*in_to_out_section_index)[out_sections->length]
         = g_alloc(in_elfs_length * sizeof in_to_out_section_index[0]);
 
     // Sort input sections to match output section indices.
@@ -303,10 +303,14 @@ int main(int argc, char* argv[])
         }
     }
 
-    // Update sh_link
-    for (size_t i = 0; i < out_sections->length; ++i) {
+    // Update sh_link and sh_info.
+    for (size_t i = 0; i < out_sections->length; ++i)
+    {
         Section* sect = &out_sections->data[i];
         sect->header.sh_link = index_of(out_sections, 0, sect->link, NULL);
+
+        if (sect->header.sh_type == SHT_RELA)
+            sect->header.sh_info = index_of(out_sections, 0, sect->name + strlen(".rela"), NULL);
     }
 
     // ------------------------------------------------------------------------
