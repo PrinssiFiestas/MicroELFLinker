@@ -385,12 +385,14 @@ int main(int argc, char* argv[])
                 size_t k = in_to_out_section_index[i][sym.st_shndx];
                 sym.st_shndx = k;
 
-                // Concatenating sections moved symbol, calculate offset.
+                // Concatenating sections moves symbols (other than section
+                // symbols themselves), calculate offset and update value.
                 size_t section_offset = 0;
-                for (size_t h = 0; h < i; ++h)
-                    section_offset += round_to_aligned(
-                        in_shdrs[h][k].sh_size,
-                        in_shdrs[h][k].sh_addralign);
+                if (ELF64_ST_TYPE(sym.st_info) != STT_SECTION)
+                    for (size_t h = 0; h < i; ++h)
+                        section_offset += round_to_aligned(
+                            in_shdrs[h][k].sh_size,
+                            in_shdrs[h][k].sh_addralign);
                 sym.st_value += section_offset;
             }
 
@@ -410,7 +412,7 @@ int main(int argc, char* argv[])
             user_assert(ELF64_ST_BIND(sym.st_info) != STB_LOCAL,
                 "Local symbol %s found after sh_info %zu in %s.\n",
                 sym_name, locals_length, in_paths[i]);
-            if (sym.st_shndx == SHN_UNDEF) // symbol undefined // TODO enforce no undefined symbols somewhere
+            if (sym.st_shndx == SHN_UNDEF) // symbol undefined
                 continue;
 
             sym.st_name = out_symstrtab->length;
@@ -591,7 +593,7 @@ int main(int argc, char* argv[])
                 [SHF_ALLOC | SHF_WRITE    ] = PF_R | PF_W,
                 [SHF_ALLOC                ] = PF_R
             };
-            Elf64_Xword flags = shf_to_pf[ // TODO check that masking makes sense
+            Elf64_Xword flags = shf_to_pf[
                 sect->header.sh_flags & (SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR)];
 
             for (i_seg = 1; i_seg < segments->length; ++i_seg)
