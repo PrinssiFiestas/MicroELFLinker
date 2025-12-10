@@ -161,8 +161,9 @@ size_t section_offset(Elf64_Shdr** in_shdrs, size_t i_file, size_t i_sect)
         section_offset += in_shdrs[i][i_sect].sh_size;
         // Note that alignment of the same section might differ for each input.
         // For example GCC has 8 for char arrays, GNU assembler only has 1.
-        section_offset = round_to_aligned(
-            section_offset, in_shdrs[i + 1][i_sect].sh_addralign);
+        if (in_shdrs[i + 1][i_sect].sh_addralign != 0)
+            section_offset = round_to_aligned(
+                section_offset, in_shdrs[i + 1][i_sect].sh_addralign);
     }
     return section_offset;
 }
@@ -469,15 +470,13 @@ int main(int argc, char* argv[])
         {
             Elf64_Shdr        rels_shdr   = in_shdrs[i_file][rel_indices[i_rel]];
             const Elf64_Rela* rels        = in_section_contents[i_file][rel_indices[i_rel]];
-            const char*       rels_name   = in_shstrtabs[i_file] + rels_shdr.sh_name;
             size_t            rels_length = rels_shdr.sh_size / sizeof rels[0];
             for (size_t k = 0; k < rels_length; ++k)
             {
                 Elf64_Rela rel = rels[k];
 
-                // Update r_offset // TODO we can use sh_info here instead of index_of()
-                size_t i_target = index_of(
-                    out_sections, 0, rels_name + strlen(".rela"), NULL);
+                // Update r_offset
+                size_t i_target = in_to_out_section_index[i_file][rels_shdr.sh_info];
                 rel.r_offset += section_offset(in_shdrs, i_file, i_target);
 
                 // Input symbol
@@ -504,14 +503,6 @@ int main(int argc, char* argv[])
                         ;
                 i_sym = index_of(sym_map, map_offset, name, NULL);
                 user_assert(i_sym < sym_map->length, "Undefined reference to %s.\n", name);
-
-                // TODO why are these failing?
-                //if (ELF64_ST_TYPE(sym.st_info) != STT_NOTYPE)
-                //    Assert(sym.st_info == out_symtab->data[i_sym].st_info,
-                //        "Failed relocation symbol matching for %s symbol.\n", name);
-                //else
-                //    Assert(sym.st_info == out_symtab->data[i_sym].st_info,
-                //           "Failed relocation symbol matching for %s symbol.\n", name);
 
                 // GNU assembler sometimes replaces data symbols with section
                 // symbols with addends for whatever reason.

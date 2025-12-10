@@ -95,15 +95,16 @@
     p;                                       \
 })
 
-#define round_to_aligned(X, ALIGN)                              \
-({                                                              \
-    size_t _x     = (X);                                        \
-    size_t _align = (ALIGN);                                    \
-    Assert((_align & (_align - 1)) == 0,                        \
-        "round_to_aligned(): Alignment must be a power of 2.\n" \
-        "Passed alignment: %zu\n", _align);                     \
-    --_align;                                                   \
-     _x + _align - ((_x - 1) & _align);                         \
+#define round_to_aligned(X, ALIGN)                                  \
+({                                                                  \
+    size_t _x     = (X);                                            \
+    size_t _align = (ALIGN);                                        \
+    Assert(_align != 0, "round_to_aligned(): invalid argument.\n"); \
+    Assert((_align & (_align - 1)) == 0,                            \
+        "round_to_aligned(): Alignment must be a power of 2.\n"     \
+        "Passed alignment: %zu\n", _align);                         \
+    --_align;                                                       \
+     _x + _align - ((_x - 1) & _align);                             \
 })
 
 static inline void dynarr_add_reserve(size_t elem_size, void* darr_ptr, size_t nelems)
