@@ -494,11 +494,13 @@ int main(int argc, char* argv[])
 
                 // Output symbol
                 size_t map_offset = 1; // cannot be empty, start from 1
-                if (ELF64_ST_BIND(sym.st_info) == STB_GLOBAL)
+                if (ELF64_ST_TYPE(sym.st_info) == STT_SECTION)
+                    ; // sections are classified as locals, but we don't care
+                else if (ELF64_ST_BIND(sym.st_info) == STB_GLOBAL)
                     map_offset = out_sections->data[symtab_index].header.sh_info;
                 else for (size_t h = 0; h < i_file; ++h)
                     map_offset += in_shdrs[h][symtab_index].sh_info
-                        + 1 // skip file symbol
+                        + 1 // skip the file symbol that we added
                         ;
                 i_sym = index_of(sym_map, map_offset, name, NULL);
                 user_assert(i_sym < sym_map->length, "Undefined reference to %s.\n", name);

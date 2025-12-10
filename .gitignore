@@ -6,3 +6,4 @@ hello
 a.out
 *.o
 *.so
+test.txt

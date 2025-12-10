@@ -6,6 +6,7 @@
 .PHONY: all   # default, builds with debug symbols.
 .PHONY: debug # same as all except with sanitizers.
 .PHONY: clean # remove build junk
+.PHONY: tests # build and run tests
 
 LNKNAME = microlink
 ELFNAME = peekelf
@@ -23,5 +24,20 @@ all:
 debug: SANITIZERS = -fsanitize=address -fsanitize=leak -fsanitize=undefined
 debug: all
 
+tests: clean all
+	./$(LNKNAME) foo.o foobar.o bar.o && ./a.out > test.txt
+	diff test.txt tests_expected_output.txt
+	./$(LNKNAME) foo.o bar.o foobar.o && ./a.out > test.txt
+	diff test.txt tests_expected_output.txt
+	./$(LNKNAME) foobar.o foo.o bar.o && ./a.out > test.txt
+	diff test.txt tests_expected_output.txt
+	./$(LNKNAME) foobar.o bar.o foo.o && ./a.out > test.txt
+	diff test.txt tests_expected_output.txt
+	./$(LNKNAME) bar.o foo.o foobar.o && ./a.out > test.txt
+	diff test.txt tests_expected_output.txt
+	./$(LNKNAME) bar.o foobar.o foo.o && ./a.out > test.txt
+	diff test.txt tests_expected_output.txt
+	@echo "Passed all tests!"
+
 clean:
-	rm -f a.out foobar hello *.o *.so $(ELFNAME) $(LNKNAME)
+	rm -f a.out foobar hello test.txt *.o *.so $(ELFNAME) $(LNKNAME)
