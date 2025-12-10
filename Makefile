@@ -10,11 +10,11 @@
 
 LNKNAME = microlink
 ELFNAME = peekelf
-CC = cc
+CC = gcc
 
 all:
 	as -o hello.o hello.s
-	$(CC) -o foo.o -c foo.c -Os -no-pie -ansi -nolibc
+	$(CC) -o foo.o -c foo.c -Os -fno-PIE -std=c99
 	as -o foobar.o foobar.s
 	as -o bar.o bar.s
 	$(CC) -o $(LNKNAME) -Wall -Wextra -ggdb3 -gdwarf $(LNKNAME).c $(SANITIZERS)

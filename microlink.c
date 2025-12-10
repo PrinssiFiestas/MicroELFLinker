@@ -745,6 +745,9 @@ int main(int argc, char* argv[])
 
             switch (type)
             {
+            case R_X86_64_NONE:
+                break;
+
             case R_X86_64_32: case R_X86_64_32S:
                 dword = sym.st_value + rel.r_addend;
                 memcpy(target, &dword, sizeof dword);
@@ -769,6 +772,9 @@ int main(int argc, char* argv[])
                 qword = sym.st_value + rel.r_addend - (rel.r_offset + secs[i_sect_target].sh_addr);
                 memcpy(target, &qword, sizeof qword);
                 break;
+
+            default:
+                user_assert(0, "Unsupported relocation type: %lu\n", type);
             }
         }
 

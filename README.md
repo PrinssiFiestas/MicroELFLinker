@@ -6,7 +6,7 @@ Simplicity and completeness are inherently conflicting requirements. Generating 
 
 ## `microlink`
 
-Creates simple static non-PIE executables from simple `*.o` object files. Handles basic relocations of global symbols including procedures. 
+Creates simple static non-PIE executables from simple `*.o` object files. Handles basic relocations of global symbols including procedures. Links GNU assembler assembled object files and even some GCC and Clang compiled C code, although linking to standard libraries is not supported and `-fno-PIE` flag must be used. `-std=c99` is somewhat optional, any C version will work as long as thread local storage or other features that require linker support are not used. 
 
 ## `peekelf`
 
@@ -32,6 +32,12 @@ Running the ELF examination utility:
 
 ```bash
 ./peekelf [object_file]
+```
+
+`foo.c`, `foobar.s`, and `bar.s` contain assembly and C code that can be linked to an executable. Automated tests that link these files in different orders and runs them can be run with
+
+```bash
+make tests
 ```
 
 ## References
