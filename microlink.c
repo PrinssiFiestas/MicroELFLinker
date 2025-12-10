@@ -251,40 +251,40 @@ int main(int argc, char* argv[])
     // Section sorting
 
     // Read input files and create initial output sections.
-    for (size_t i = 0; i < in_elfs_length; ++i)
+    for (size_t i_file = 0; i_file < in_elfs_length; ++i_file)
     {
-        in_ehdrs[i] = in_elfs[i] = read_elf_file(in_paths[i]);
-        const Elf64_Ehdr  ehdr     = *(in_ehdrs[i]);
-        const Elf64_Shdr* shdrs    = in_elfs[i] + ehdr.e_shoff;
-        const char*       shstrtab = in_elfs[i] + shdrs[ehdr.e_shstrndx].sh_offset;
-        in_shstrtabs[i] = shstrtab;
+        in_ehdrs[i_file] = in_elfs[i_file] = read_elf_file(in_paths[i_file]);
+        const Elf64_Ehdr  ehdr     = *(in_ehdrs[i_file]);
+        const Elf64_Shdr* shdrs    = in_elfs[i_file] + ehdr.e_shoff;
+        const char*       shstrtab = in_elfs[i_file] + shdrs[ehdr.e_shstrndx].sh_offset;
+        in_shstrtabs[i_file] = shstrtab;
 
-        for (size_t j = 0; j < ehdr.e_shnum; ++j) {
-            const Elf64_Shdr shdr = shdrs[j];
+        for (size_t i_in_sect = 0; i_in_sect < ehdr.e_shnum; ++i_in_sect) {
+            const Elf64_Shdr shdr = shdrs[i_in_sect];
             uint64_t hash;
-            size_t k = index_of(out_sections, 0, shstrtab + shdr.sh_name, &hash);
-            if (k == out_sections->length) {
+            size_t i_out_sect = index_of(out_sections, 0, shstrtab + shdr.sh_name, &hash);
+            if (i_out_sect == out_sections->length) {
                 dynarr_push(&out_sections, ((Section) {
                     .name   = shstrtab + shdr.sh_name,
                     .hash   = hash,
                     .link   = shstrtab + shdrs[shdr.sh_link].sh_name,
                     .header = shdr}));
-                out_sections->data[k].header.sh_size = 0; // to be filled later
-                out_sections->data[k].header.sh_link = 0; // to be filled later
+                out_sections->data[i_out_sect].header.sh_size = 0; // to be filled later
+                out_sections->data[i_out_sect].header.sh_link = 0; // to be filled later
 
                 if (shdr.sh_type == SHT_RELA)
                     ++rel_indices_length;
             }
             else {
-                user_assert(out_sections->data[k].header.sh_type == shdr.sh_type,
-                    "Expected matching types for %s section.\n", out_sections->data[k].name);
-                user_assert(out_sections->data[k].header.sh_flags == shdr.sh_flags,
-                    "Expected matching flags for %s section.\n", out_sections->data[k].name);
-                user_assert(out_sections->data[k].header.sh_entsize == shdr.sh_entsize,
-                    "Expected matching entry sizes for %s section.\n", out_sections->data[k].name);
+                user_assert(out_sections->data[i_out_sect].header.sh_type == shdr.sh_type,
+                    "Expected matching types for %s section.\n", out_sections->data[i_out_sect].name);
+                user_assert(out_sections->data[i_out_sect].header.sh_flags == shdr.sh_flags,
+                    "Expected matching flags for %s section.\n", out_sections->data[i_out_sect].name);
+                user_assert(out_sections->data[i_out_sect].header.sh_entsize == shdr.sh_entsize,
+                    "Expected matching entry sizes for %s section.\n", out_sections->data[i_out_sect].name);
 
-                if (shdr.sh_addralign > out_sections->data[k].header.sh_addralign)
-                    out_sections->data[k].header.sh_addralign = shdr.sh_addralign;
+                if (shdr.sh_addralign > out_sections->data[i_out_sect].header.sh_addralign)
+                    out_sections->data[i_out_sect].header.sh_addralign = shdr.sh_addralign;
             }
         }
     }
@@ -295,28 +295,29 @@ int main(int argc, char* argv[])
         = g_alloc(in_elfs_length * sizeof in_to_out_section_index[0]);
 
     // Sort input sections to match output section indices.
-    for (size_t i = 0; i < in_elfs_length; ++i)
+    for (size_t i_file = 0; i_file < in_elfs_length; ++i_file)
     {
-        const Elf64_Ehdr  ehdr     = *(in_ehdrs[i]);
-        const Elf64_Shdr* shdrs    = in_elfs[i] + ehdr.e_shoff;
-        const char*       shstrtab = in_shstrtabs[i];;
+        const Elf64_Ehdr  ehdr     = *(in_ehdrs[i_file]);
+        const Elf64_Shdr* shdrs    = in_elfs[i_file] + ehdr.e_shoff;
+        const char*       shstrtab = in_shstrtabs[i_file];;
 
-        in_shdrs[i]             = g_alloc(out_sections->length * sizeof in_shdrs[i][0]);
-        in_section_contents[i]  = g_alloc(out_sections->length * sizeof in_section_contents[i][0]);
-        memset(in_shdrs[i],            0, out_sections->length * sizeof in_shdrs[i][0]);
-        memset(in_section_contents[i], 0, out_sections->length * sizeof in_section_contents[i][0]);
+        in_shdrs[i_file]             = g_alloc(out_sections->length * sizeof in_shdrs[i_file][0]);
+        in_section_contents[i_file]  = g_alloc(out_sections->length * sizeof in_section_contents[i_file][0]);
+        memset(in_shdrs[i_file],            0, out_sections->length * sizeof in_shdrs[i_file][0]);
+        memset(in_section_contents[i_file], 0, out_sections->length * sizeof in_section_contents[i_file][0]);
 
-        for (size_t j = 0; j < ehdr.e_shnum; ++j) {
-            size_t k = index_of(out_sections, 0, shstrtab + shdrs[j].sh_name, NULL);
-            Assert(k < out_sections->length,
+        for (size_t i_in_sect = 0; i_in_sect < ehdr.e_shnum; ++i_in_sect) {
+            size_t i_out_sect = index_of(
+                out_sections, 0, shstrtab + shdrs[i_in_sect].sh_name, NULL);
+            Assert(i_out_sect < out_sections->length,
                 "Sanity check: output sections were created based on input sections.\n");
-            in_shdrs[i][k]                = shdrs[j];
-            in_section_contents[i][k]     = in_elfs[i] + shdrs[j].sh_offset;
-            in_to_out_section_index[i][j] = k;
+            in_shdrs[i_file][i_out_sect]                = shdrs[i_in_sect];
+            in_section_contents[i_file][i_out_sect]     = in_elfs[i_file] + shdrs[i_in_sect].sh_offset;
+            in_to_out_section_index[i_file][i_in_sect] = i_out_sect;
 
-            if (shdrs[j].sh_type == SHT_STRTAB
-                && strcmp(shstrtab + shdrs[j].sh_name, ".strtab") == 0)
-                in_symstrtabs[i] = in_elfs[i] + shdrs[j].sh_offset;
+            if (shdrs[i_in_sect].sh_type == SHT_STRTAB
+                && strcmp(shstrtab + shdrs[i_in_sect].sh_name, ".strtab") == 0)
+                in_symstrtabs[i_file] = in_elfs[i_file] + shdrs[i_in_sect].sh_offset;
         }
     }
 
@@ -522,20 +523,20 @@ int main(int argc, char* argv[])
 
     // Concatenate all other input sections contents to output sections
     // contents.
-    for (size_t i = 0; i < out_sections->length; ++i)
+    for (size_t i_sect = 0; i_sect < out_sections->length; ++i_sect)
     {
-        Section* sect = &out_sections->data[i];
+        Section* sect = &out_sections->data[i_sect];
 
         // Skip manually filled sections.
-        if (i == shstrtab_index || i == symstrtab_index || i == symtab_index)
+        if (i_sect == shstrtab_index || i_sect == symstrtab_index || i_sect == symtab_index)
             continue;
         if (sect->header.sh_type == SHT_RELA)
             continue;
 
         // Allocate memory
         size_t total_size = 0;
-        for (size_t j = 0; j < in_elfs_length; ++j) {
-            Elf64_Shdr shdr = in_shdrs[j][i];
+        for (size_t i_file = 0; i_file < in_elfs_length; ++i_file) {
+            Elf64_Shdr shdr = in_shdrs[i_file][i_sect];
             // Rounding for allocation must be done on max alignment, which is
             // output alignment.
             total_size += round_to_aligned(shdr.sh_size, sect->header.sh_addralign);
@@ -544,12 +545,12 @@ int main(int argc, char* argv[])
 
         // Concatenate
         for (size_t j = 0; j < in_elfs_length; ++j) {
-            Elf64_Shdr shdr = in_shdrs[j][i];
+            Elf64_Shdr shdr = in_shdrs[j][i_sect];
             sect->header.sh_size = round_to_aligned(
                 sect->header.sh_size, shdr.sh_addralign + !shdr.sh_addralign);
             memcpy(
                 sect->contents + sect->header.sh_size,
-                in_section_contents[j][i],
+                in_section_contents[j][i_sect],
                 shdr.sh_size);
             sect->header.sh_size += shdr.sh_size;
         }
@@ -580,9 +581,9 @@ int main(int argc, char* argv[])
             + 64/* other stuff */);
 
     // Sort sections to segments
-    for (size_t i = 0; i < out_sections->length; ++i)
+    for (size_t i_sect = 0; i_sect < out_sections->length; ++i_sect)
     {
-        Section* sect = &out_sections->data[i];
+        Section* sect = &out_sections->data[i_sect];
         size_t  i_seg = 0;
 
         if (sect->header.sh_type == SHT_PROGBITS) // find segment
@@ -732,11 +733,11 @@ int main(int argc, char* argv[])
 
         Elf64_Shdr  rels_shdr = secs[i_rel_sect];
         Elf64_Rela* rels = (Elf64_Rela*)(out_data->data + rels_shdr.sh_offset);
-        for (size_t j = 0; j < rels_shdr.sh_size/rels_shdr.sh_entsize; ++j)
+        for (size_t i_rel = 0; i_rel < rels_shdr.sh_size/rels_shdr.sh_entsize; ++i_rel)
         {
             uint32_t dword;
             uint64_t qword;
-            Elf64_Rela rel = rels[j];
+            Elf64_Rela rel = rels[i_rel];
             Elf64_Xword type = ELF64_R_TYPE(rel.r_info);
             Elf64_Xword i_sym = ELF64_R_SYM(rel.r_info);
             Elf64_Sym sym = syms[i_sym];

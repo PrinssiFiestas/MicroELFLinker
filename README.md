@@ -34,3 +34,10 @@ Running the ELF examination utility:
 ./peekelf [object_file]
 ```
 
+## References
+
+- [ELF Format Cheatsheet](https://gist.github.com/x0nu11byt3/bcb35c3de461e5fb66173071a2379779)
+- [Oracle Linker Guide](https://docs.oracle.com/cd/E19683-01/816-1386/6m7qcoblh/index.html)
+- [Ian Lance Taylor (author of GOLD) blogs](https://www.airs.com/blog/archives/38)
+- [elf(5) man pages](https://www.man7.org/linux/man-pages/man5/elf.5.html)
+- [elf.h](https://codebrowser.dev/glibc/glibc/elf/elf.h.html)
