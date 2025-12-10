@@ -158,12 +158,11 @@ size_t section_offset(Elf64_Shdr** in_shdrs, size_t i_file, size_t i_sect)
 {
     size_t section_offset = 0;
     for (size_t i = 0; i < i_file; ++i) {
-        // Conceptually i+1 aligns the previous file's section offset.
+        section_offset += in_shdrs[i][i_sect].sh_size;
         // Note that alignment of the same section might differ for each input.
         // For example GCC has 8 for char arrays, GNU assembler only has 1.
         section_offset = round_to_aligned(
             section_offset, in_shdrs[i + 1][i_sect].sh_addralign);
-        section_offset += in_shdrs[i][i_sect].sh_size;
     }
     return section_offset;
 }
@@ -363,8 +362,8 @@ int main(int argc, char* argv[])
 
     // ------------------------------------------------------------------------
     // Merge symbol table and symbol string table. We assume that the assembler
-    // put locals first, then globals. This is enforced somewhere below. Weaks
-    // not handled for now.
+    // put locals first, then globals. This is enforced somewhere below. Weak
+    // symbols not handled for now.
 
     for (size_t i_file = 0; i_file < in_elfs_length; ++i_file) // locals first
     {
@@ -544,8 +543,8 @@ int main(int argc, char* argv[])
         size_t total_size = 0;
         for (size_t j = 0; j < in_elfs_length; ++j) {
             Elf64_Shdr shdr = in_shdrs[j][i];
-            // Note: rounding for allocation must be done on max alignment,
-            // which is output alignment.
+            // Rounding for allocation must be done on max alignment, which is
+            // output alignment.
             total_size += round_to_aligned(shdr.sh_size, sect->header.sh_addralign);
         }
         sect->contents = g_alloc(total_size);
@@ -554,7 +553,7 @@ int main(int argc, char* argv[])
         for (size_t j = 0; j < in_elfs_length; ++j) {
             Elf64_Shdr shdr = in_shdrs[j][i];
             sect->header.sh_size = round_to_aligned(
-                sect->header.sh_size, in_shdrs[j][i].sh_addralign);
+                sect->header.sh_size, shdr.sh_addralign);
             memcpy(
                 sect->contents + sect->header.sh_size,
                 in_section_contents[j][i],
