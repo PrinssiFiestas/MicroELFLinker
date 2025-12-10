@@ -475,7 +475,7 @@ int main(int argc, char* argv[])
             {
                 Elf64_Rela rel = rels[k];
 
-                // Update r_offset
+                // Update r_offset // TODO we can use sh_info here instead of index_of()
                 size_t i_target = index_of(
                     out_sections, 0, rels_name + strlen(".rela"), NULL);
                 rel.r_offset += section_offset(in_shdrs, i_file, i_target);
@@ -555,7 +555,7 @@ int main(int argc, char* argv[])
         for (size_t j = 0; j < in_elfs_length; ++j) {
             Elf64_Shdr shdr = in_shdrs[j][i];
             sect->header.sh_size = round_to_aligned(
-                sect->header.sh_size, shdr.sh_addralign);
+                sect->header.sh_size, shdr.sh_addralign + !shdr.sh_addralign);
             memcpy(
                 sect->contents + sect->header.sh_size,
                 in_section_contents[j][i],
@@ -683,7 +683,7 @@ int main(int argc, char* argv[])
     for (size_t i = 1; i < segments->length; ++i)
     {
         Segment seg = segments->data[i];
-        if (seg.contents == NULL)
+        if (seg.contents == NULL) // prevent NULL dereference
             dynarr_add_reserve(sizeof seg.contents->data[0], &seg.contents, 1);
 
         dynarr_align(&out_data, seg.header.p_align);
@@ -768,14 +768,13 @@ int main(int argc, char* argv[])
                 memcpy(target, &dword, sizeof dword);
                 break;
 
-            case R_X86_64_PC32: // TODO these are wrong!
-                //dword = sym.st_value + rel.r_addend - (rel.r_offset + secs[rels_shdr.sh_info].sh_addr);
+            case R_X86_64_PC32:
                 dword = sym.st_value + rel.r_addend - (rel.r_offset + secs[i_sect_target].sh_addr);
                 memcpy(target, &dword, sizeof dword);
                 break;
 
             case R_X86_64_PC64:
-                qword = sym.st_value + rel.r_addend - rel.r_offset;
+                qword = sym.st_value + rel.r_addend - (rel.r_offset + secs[i_sect_target].sh_addr);
                 memcpy(target, &qword, sizeof qword);
                 break;
             }

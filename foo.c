@@ -1,9 +1,9 @@
-#if 0 /* const char pointers */
+#if 1 /* const char pointers */
 
 const char* foo_pad = "pad";
 const char* foo_msg = "I am foo!\n";
 
-extern const char* foobar_walrus;
+extern const char foobar_walrus[];
 extern long bar_puts(const char* msg);
 
 long foo_walrus(void)
