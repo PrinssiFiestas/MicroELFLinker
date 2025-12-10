@@ -1,12 +1,12 @@
 # Micro ELF Linker
 
-Static x86_64 Linux ELF linker (`microlink`) and ELF examination utility (`peekelf`). This is a personal project that was meant to teach the inner workings of Linux executables and systems design. It is meant to be as simple to read and debug as possible, but also complete enough to be educationally useful i.e. it must be able to generate working executables from assembler generated inputs. 
+Static x86_64 Linux ELF linker (`microlink`) and ELF examination utility (`peekelf`). This is a personal project that was meant to teach the inner workings of Linux executables and systems design. It is meant to be as simple to read and debug as possible, but also complete enough to be educationally useful i.e. it must be able to generate working executables. 
 
 Simplicity and completeness are inherently conflicting requirements. Generating a working executable was the first priority, so simplicity here just means that the code has been written in the most straight forward way possible (minimal abstraction/indirection, simple control flow and project structure, only simple optimizations, etc.) given the complexity of an actually working ELF linker. 
 
 ## `microlink`
 
-Creates simple static non-PIE executables from simple `*.o` object files. Handles basic relocations of global symbols including procedures. Links GNU assembler assembled object files and even some GCC and Clang compiled C code, although linking to standard libraries is not supported and `-fno-PIE` flag must be used. `-std=c99` is somewhat optional, any C version will work as long as thread local storage or other features that require linker support are not used. 
+Creates simple static non-PIE executables from `.o` object files. Handles basic relocations of global symbols including procedures/functions. Links GNU assembler assembled object files and even some GCC and Clang compiled C code, although linking to standard libraries is not supported and `-fno-PIE` flag must be used. `-std=c99` recommended, but any C version will work as long as thread local storage or other features that require linker support are not used. 
 
 ## `peekelf`
 
