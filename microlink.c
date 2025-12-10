@@ -505,7 +505,7 @@ int main(int argc, char* argv[])
                 i_sym = index_of(sym_map, map_offset, name, NULL);
                 user_assert(i_sym < sym_map->length, "Undefined reference to %s.\n", name);
 
-                // TODO
+                // TODO why are these failing?
                 //if (ELF64_ST_TYPE(sym.st_info) != STT_NOTYPE)
                 //    Assert(sym.st_info == out_symtab->data[i_sym].st_info,
                 //        "Failed relocation symbol matching for %s symbol.\n", name);
